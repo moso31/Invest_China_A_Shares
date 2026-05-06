@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}LOHA - 调试功能{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>调试功能</h1>
+  <p class="muted">这些功能用于规则变更后的维护，不属于日常选股流程。</p>
+</section>
+
+<section class="grid two">
+  <div class="card">
+    <h3>重算全 A 股评分缓存</h3>
+    <p>
+      复用本地已缓存的行情、估值、财务和分红数据，按当前 Q/D/V/T/R 规则重新计算全 A 股评分和排序。
+      该功能不会清空缓存，也不会主动请求 AKShare。
+    </p>
+    <p class="muted">
+      适用场景：调整了 D 分红因子、评分权重、风险/利好信号分类等算法后，希望机器选股页立即使用新规则。
+    </p>
+    <div class="row debug-action-row">
+      <button id="recomputeBtn" class="button primary">重算评分缓存</button>
+      <div id="recomputeProgress" class="progress-box" aria-live="polite">
+        <div class="progress-head">
+          <span id="recomputeStatus" class="muted">未运行</span>
+          <span id="recomputePercent" class="progress-percent">0%</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="recomputeBar" class="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>缓存状态</h3>
+    <table class="kv" id="metaTbl">
+      <tr><td>状态</td><td>读取中...</td></tr>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const recomputeBtn = document.getElementById("recomputeBtn");
+const recomputeStatus = document.getElementById("recomputeStatus");
+const recomputePercent = document.getElementById("recomputePercent");
+const recomputeBar = document.getElementById("recomputeBar");
+const recomputeProgress = document.getElementById("recomputeProgress");
+const metaTbl = document.getElementById("metaTbl");
+
+function row(k, v) { return `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`; }
+function setProgress(done, total, statusText) {
+  const totalNum = Number(total || 0);
+  const doneNum = Number(done || 0);
+  const pct = totalNum > 0 ? Math.min(100, Math.max(0, doneNum / totalNum * 100)) : 0;
+  recomputeStatus.textContent = statusText;
+  recomputePercent.textContent = `${pct.toFixed(1)}%`;
+  recomputeBar.style.width = `${pct}%`;
+  recomputeProgress.querySelector(".progress-track").setAttribute("aria-valuenow", String(Math.round(pct)));
+}
+
+async function loadMeta() {
+  const r = await (await fetch("/api/screener/full-scan/meta")).json();
+  const m = r.meta;
+  if (!m) {
+    metaTbl.innerHTML = row("全盘扫描", "暂无结果缓存");
+    return;
+  }
+  metaTbl.innerHTML = `
+    ${row("最后全盘扫描", m.success_at || "—")}
+    ${row("最后调试重算", m.last_recompute_at || "—")}
+    ${row("全市场数量", m.source_total ?? "—")}
+    ${row("预筛通过", m.prefiltered_total ?? "—")}
+    ${row("评分数量", m.done ?? m.total ?? "—")}
+    ${row("入选", m.accepted ?? "—")}
+    ${row("剔除", m.rejected ?? "—")}
+    ${row("失败", m.failed ?? "—")}
+  `;
+}
+
+async function pollProgress() {
+  const r = await (await fetch("/api/screener/progress")).json();
+  if (r.state === "running") {
+    recomputeBtn.disabled = true;
+    const label = r.mode === "debug_recompute" ? "调试重算" : "任务运行中";
+    setProgress(
+      r.done,
+      r.total,
+      `${label} ${r.done}/${r.total} · 入选 ${r.accepted} · 剔除 ${r.rejected} · 失败 ${r.failed} · ${r.elapsed_s}s`
+    );
+    setTimeout(pollProgress, 900);
+  } else if (r.state === "done") {
+    recomputeBtn.disabled = false;
+    if (r.mode === "debug_recompute") {
+      setProgress(
+        r.total,
+        r.total,
+        `重算完成：${r.done}/${r.total} · 入选 ${r.accepted} · 剔除 ${r.rejected} · 失败 ${r.failed}`
+      );
+      loadMeta();
+    }
+  } else if (r.state === "error") {
+    recomputeBtn.disabled = false;
+    setProgress(0, 0, `错误：${r.error}`);
+  } else {
+    recomputeBtn.disabled = false;
+  }
+}
+
+recomputeBtn.addEventListener("click", async () => {
+  const ok = confirm("确认重算全 A 股评分缓存？该操作只读取本地缓存，不主动抓取新数据；缺失缓存的数据会按现有缺省规则评分。");
+  if (!ok) return;
+  recomputeBtn.disabled = true;
+  setProgress(0, 0, "正在启动...");
+  const r = await (await fetch("/api/debug/recompute-scores/run", {method: "POST"})).json();
+  if (!r.ok) {
+    setProgress(0, 0, r.msg || "启动失败");
+    recomputeBtn.disabled = false;
+    return;
+  }
+  pollProgress();
+});
+
+loadMeta();
+pollProgress();
+</script>
+{% endblock %}

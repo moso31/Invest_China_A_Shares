@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}LOHA - {{ symbol }}{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div class="row stock-title-row">
+    <h1 id="title">{{ symbol }}</h1>
+    <button id="refreshBtn" class="button">手动更新数据</button>
+    <span id="refreshStatus" class="muted"></span>
+  </div>
+  <p id="subtitle" class="muted">加载中…</p>
+</section>
+
+<section class="grid two">
+  <div class="card">
+    <h3>评分</h3>
+    <table class="kv" id="scoreTbl"></table>
+    <div class="signal-block">
+      <strong>利好信号</strong>
+      <p id="scoreGoodFlags" class="flags"></p>
+    </div>
+    <div class="signal-block">
+      <strong>风险信号</strong>
+      <p id="scoreRiskFlags" class="flags"></p>
+    </div>
+  </div>
+  <div class="card">
+    <h3>估值与做T区间</h3>
+    <table class="kv" id="intervalTbl"></table>
+    <p id="intervalNotes" class="muted"></p>
+  </div>
+  <div class="card">
+    <h3>操作建议</h3>
+    <table class="kv" id="actionTbl"></table>
+  </div>
+  <div class="card">
+    <h3>因子细节</h3>
+    <pre id="components"></pre>
+  </div>
+  <div class="card">
+    <h3>历年分红</h3>
+    <table class="kv" id="dividendTbl"></table>
+    <p id="dividendSummary" class="muted" style="margin-top:.6em"></p>
+  </div>
+  <div class="card">
+    <h3>基本信息</h3>
+    <table class="kv" id="infoTbl"></table>
+    <div id="poolControls" class="row" style="margin-top:1em">
+      <button id="addBtn" class="button primary">加入股票池</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SYMBOL = {{ symbol|tojson }};
+const refreshBtn = document.getElementById("refreshBtn");
+const refreshStatus = document.getElementById("refreshStatus");
+const bandLabel = { cheap: "低估带", neutral: "中性带", expensive: "偏贵带", unknown: "—" };
+const factorTips = {
+  score: "策略适配分 = 0.45D + 0.35V + 0.20T。Q 与 R 保留为复核项，风险红旗单独提示。",
+  Q: "Q = 企业质量复核项。由 ROE、现金流、利润率、负债和增长等内部子分合成，用于人工复核和价值陷阱识别。",
+  D: "D = dividend_score，权重 45%。按5年加权股息率、分红率风险过滤、现金流覆盖、ROE 稳定性合成。",
+  V: "V = value_score，权重 35%。按 estimate.md 行业 bucket 选择 PE/PB/DDM/NAV 等主估值方法，并输出估值带与安全边际。",
+  T: "T = t_score，权重 20%。按 60 日年化波动、20 日成交额、Beta、60 日趋势合成。",
+  R: "R = 风险复核项。检查近3年亏损年数、商誉占净资产比例、总市值规模、营收/净利趋势、现金流覆盖质量、应收/存货异常；房地产另检查现金短债比。R 不直接扣总分，高风险会影响加仓确认。"
+};
+const intervalTips = {
+  last_price: "当前价：用于计算交易区间的最新收盘价或估值接口收盘价。价格本身不代表买入信号，需要结合估值带、ATR 和风险信号。",
+  band: "当前估值带：优先看估值安全边际，其次看 bucket 主估值分位。安全边际充足或分位≤20% 为低估带；高于中枢或分位≥80% 为偏贵带。",
+  buy_low: "买入触发价：estimate.md 做T区间下沿，来自 60 日波动带并受 fair_mid×0.85 裁剪。当前价低于或接近该值，且未触发风险信号时，才考虑分批加仓。",
+  buy_mid: "中性入场：买入触发价与当前价之间的参考中点，只是辅助观察位，不是硬性买点。",
+  sell_high: "卖出触发价：estimate.md 做T区间上沿，来自 60 日波动带并受 fair_mid×1.15 裁剪。当前价高于或接近该值，尤其估值偏贵时，优先考虑减仓或停止加仓。",
+  atr: "ATR(20)：20 日平均真实波幅，反映近期绝对波动空间。ATR 越大，网格间距通常应越宽。",
+  atr_pct: "ATR%：ATR(20) / 当前价。约 1.5%-4% 通常较适合机动仓；低于 1% 做 T 空间偏小；高于 6% 波动风险偏高。",
+  valuation_pct: "主估值分位：由行业 bucket 决定采用 PE 或 PB 等主指标。越低越便宜；≤20% 为低估带，≥80% 为偏贵带。",
+  lot_size: "每档股数：根据策略预算和 A 股一手规则设定。当前价低于 5 元按 200 股一档；不低于 5 元按 100 股一档。"
+};
+
+function row(k, v) { return `<tr><td>${k}</td><td>${v ?? "—"}</td></tr>`; }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+function factorLabel(key, text) {
+  return `<span class="factor-help" data-tooltip="${escapeAttr(factorTips[key])}">${text}</span>`;
+}
+function intervalLabel(key, text) {
+  return `<span class="factor-help" data-tooltip="${escapeAttr(intervalTips[key])}">${text}</span>`;
+}
+function clip(x, lo=0, hi=100) {
+  if (x === null || x === undefined || Number.isNaN(Number(x))) return 50;
+  return Math.max(lo, Math.min(hi, Number(x)));
+}
+function n(x, digits=1) {
+  if (x === null || x === undefined || Number.isNaN(Number(x))) return "—";
+  return Number(x).toFixed(digits);
+}
+function pctText(v) {
+  return v === null || v === undefined || Number.isNaN(Number(v)) ? "—" : `${n(v, 1)}%`;
+}
+function scoreTooltip(key, score) {
+  const c = score.components || {};
+  const q = c.Q || {};
+  const d = c.D || {};
+  const v = c.V || {};
+  const t = c.T || {};
+  if (key === "score") {
+    return `策略适配分 = 0.45D + 0.35V + 0.20T = 0.45×${n(score.D)} + 0.35×${n(score.V)} + 0.20×${n(score.T)} = ${n(score.score)}。Q 与 R 保留为复核项，风险红旗单独提示。`;
+  }
+  if (key === "Q") {
+    const roe = q.ROE_median_3y !== undefined ? clip(20 + Number(q.ROE_median_3y) * 4) : 50;
+    const cash = q.OCF_over_NI_3y !== undefined ? clip(30 + Number(q.OCF_over_NI_3y) * 50) : 50;
+    const margin = q.net_margin !== undefined ? clip(40 + Number(q.net_margin) * 2) : 50;
+    const gross = q.gross_margin !== undefined ? clip(30 + Number(q.gross_margin) * 1.5) : 50;
+    const debt = q.debt_note ? 65 : (q.debt_ratio !== undefined ? clip(120 - Number(q.debt_ratio)) : 50);
+    const growthVals = [q.revenue_yoy, q.net_profit_yoy].filter(x => x !== undefined && x !== null && !Number.isNaN(Number(x))).map(Number);
+    const avgGrowth = growthVals.length ? growthVals.reduce((a,b)=>a+b,0) / growthVals.length : null;
+    const growth = avgGrowth === null ? 50 : clip(50 + avgGrowth * 2);
+    return `Q = 28%×ROE子分 + 25%×现金流子分 + 17%×净利率子分 + 10%×毛利率子分 + 10%×负债子分 + 10%×成长子分。当前：ROE ${pctText(q.ROE_median_3y)}→${n(roe)}；OCF/净利 ${n(q.OCF_over_NI_3y,2)}→${n(cash)}；净利率 ${pctText(q.net_margin)}→${n(margin)}；毛利率 ${pctText(q.gross_margin)}→${n(gross)}；负债率 ${pctText(q.debt_ratio)}→${n(debt)}；成长 ${avgGrowth === null ? "—" : pctText(avgGrowth)}→${n(growth)}。合成 Q=${n(score.Q)}。`;
+  }
+  if (key === "D") {
+    return `D dividend_score = 5年加权股息率 X(60) + 分红率风险过滤 P_filter(10) + 现金流覆盖 F(15) + ROE 稳定性 S(15)。5年加权股息率 ${pctText(d.weighted_dividend_yield)}→${n(d.weighted_dividend_score)}；近3年分红率 ${pctText(d.payout_ratio_3y_avg)}→${n(d.payout_score)}；现金流覆盖 ${n(d.dividend_cash_coverage,2)}→${n(d.cash_coverage_score)}；ROE 5年标准差 ${pctText(d.roe_5y_std)}→${n(d.roe_stability_score)}。合成 D=${n(score.D)}。最新年股息率 ${pctText(d.dividend_yield)} 仅展示，不参与打分。`;
+  }
+  if (key === "V") {
+    const bucket = v.bucket_effective || v.bucket || "—";
+    return `V value_score：行业 bucket=${bucket}，方法=${v.method || "—"}。主分位 ${pctText(v.primary_percentile)}，PE分位 ${pctText(v.pe_percentile_5y)}，PB分位 ${pctText(v.pb_percentile_5y)}；估值带 low/mid/high = ${n(v.fair_low,2)} / ${n(v.fair_mid,2)} / ${n(v.fair_high,2)}；安全边际 ${pctText(v.margin_of_safety_pct)}。合成 V=${n(score.V)}。`;
+  }
+  if (key === "T") {
+    const amount = Number(t.avg_turnover_cny || 0);
+    return `T t_score = 波动率子分(40) + 流动性子分(30) + Beta子分(20) + 震荡子分(10)。当前 60日年化波动 ${pctText(t.vol_60d_annual_pct)}→${n(t.volatility_score)}；20日日均成交额 ${n(amount / 10000,1)}万→${n(t.liquidity_score)}；Beta ${n(t.beta_60d,2)}→${n(t.beta_score)}；60日涨跌幅 ${pctText(t.ret_60d_pct)}→${n(t.trend_score)}。合成 T=${n(score.T)}。`;
+  }
+  if (key === "R") {
+    return `R 风险复核项：近3年≥2年亏损 +35，营收连续下滑 +35，净利润连续下滑 +30，商誉占净资产>30% +20，现金流连续2年偏低 +20，应收或存货异常 +10，总市值<30亿 +10，房地产现金短债比<1另加标记。当前 R=${n(score.R)}；R 不直接扣总分，但高风险会触发加仓确认。`;
+  }
+  return "";
+}
+function scoreValue(key, value, score, strong=false) {
+  const text = strong ? `<strong>${value}</strong>` : value;
+  return `<span class="factor-help" data-tooltip="${escapeAttr(scoreTooltip(key, score))}">${text}</span>`;
+}
+
+function render(r) {
+  document.getElementById("title").textContent = `${r.symbol} ${r.name}`;
+  const displayInfo = r.info_display || r.info || {};
+  document.getElementById("subtitle").textContent = (displayInfo["行业"] || "") + " · " + (displayInfo["总市值"] ? "总市值 " + displayInfo["总市值"] : "");
+
+  const s = r.score;
+  document.getElementById("scoreTbl").innerHTML = `
+    ${row(factorLabel("score", "策略适配分"), scoreValue("score", s.score, s, true))}
+    ${row(factorLabel("Q", "Q · 企业质量"), scoreValue("Q", s.Q, s))}
+    ${row(factorLabel("D", "D · 分红质量"), scoreValue("D", s.D, s))}
+    ${row(factorLabel("V", "V · 估值安全"), scoreValue("V", s.V, s))}
+    ${row(factorLabel("T", "T · 交易可操作"), scoreValue("T", s.T, s))}
+    ${row(factorLabel("R", "R · 风险扣分"), scoreValue("R", s.R, s))}
+  `;
+  document.getElementById("scoreGoodFlags").innerHTML = (s.good_flags||[]).map(f => `<span class="flag good">${escapeHtml(f)}</span>`).join("") || `<span class="muted">暂无</span>`;
+  document.getElementById("scoreRiskFlags").innerHTML = (s.risk_flags||s.flags||[]).map(f => `<span class="flag risk">${escapeHtml(f)}</span>`).join("") || `<span class="muted">暂无</span>`;
+
+  const iv = r.interval;
+  const budget = iv.budget_plan || {};
+  document.getElementById("intervalTbl").innerHTML = `
+    ${row(intervalLabel("last_price", "当前价"), iv.last_price)}
+    ${row(intervalLabel("band", "当前估值带"), `<span class="band band-${iv.band}">${bandLabel[iv.band]||"—"}</span>`)}
+    ${row(intervalLabel("buy_low", "买入触发价"), iv.buy_low)}
+    ${row(intervalLabel("buy_mid", "中性入场"), iv.buy_mid)}
+    ${row(intervalLabel("sell_high", "卖出触发价"), iv.sell_high)}
+    ${row(intervalLabel("atr", "ATR(20)"), iv.atr)}
+    ${row(intervalLabel("atr_pct", "ATR%"), iv.atr_pct)}
+    ${row(intervalLabel("valuation_pct", "主估值分位"), iv.valuation_pct !== null && iv.valuation_pct !== undefined ? iv.valuation_pct + "%" : "—")}
+    ${row(intervalLabel("lot_size", "每档股数"), iv.lot_size)}
+  `;
+  document.getElementById("intervalNotes").textContent = (iv.notes||[]).join(" · ");
+
+  document.getElementById("actionTbl").innerHTML = `
+    ${row("当前建议", `<strong>${escapeHtml(r.action.action)}</strong>`)}
+    ${row("建议原因", escapeHtml(r.action.reason))}
+    ${row("单股预算", budget.per_stock_budget ? "¥" + budget.per_stock_budget.toLocaleString() : "—")}
+    ${row("底仓预算", budget.core_budget ? "¥" + budget.core_budget.toLocaleString() : "—")}
+    ${row("机动仓预算", budget.tactical_budget ? "¥" + budget.tactical_budget.toLocaleString() : "—")}
+    ${row("每档金额", budget.lot_value ? "¥" + budget.lot_value.toLocaleString() : "—")}
+    ${row("机动仓档数", budget.tactical_lots ?? "—")}
+  `;
+
+  document.getElementById("components").textContent = JSON.stringify(s.components, null, 2);
+
+  const divs = r.dividends || {};
+  const divRows = divs.rows || [];
+  let divHtml = `<tr><th>年份</th><th>每股分红(元)</th><th>实际股息率</th></tr>`;
+  divRows.forEach(dr => {
+    const amt = dr.div_per_share > 0 ? n(dr.div_per_share, 3) : "—";
+    const yld = dr.yield_pct !== null && dr.yield_pct !== undefined ? `${n(dr.yield_pct, 2)}%` : "—";
+    const mark = dr.above_4pct ? ` <span class="flag good" style="font-size:.75em;padding:1px 5px">≥4%</span>` : "";
+    divHtml += `<tr><td>${dr.year}</td><td>${amt}</td><td>${yld}${mark}</td></tr>`;
+  });
+  if (!divRows.length) divHtml += `<tr><td colspan="3" class="muted">暂无数据</td></tr>`;
+  document.getElementById("dividendTbl").innerHTML = divHtml;
+  document.getElementById("dividendSummary").innerHTML =
+    `5年加权股息率 <strong>${pctText(divs.weighted_dividend_yield)}</strong> &nbsp;·&nbsp; X 得分 <strong>${n(divs.weighted_dividend_score)}</strong>/60`;
+
+  const info = displayInfo;
+  document.getElementById("infoTbl").innerHTML = Object.keys(info).slice(0, 12).map(k => row(k, info[k])).join("");
+
+  const addBtn = document.getElementById("addBtn");
+  if (r.in_pool) { addBtn.disabled = true; addBtn.textContent = "已在股票池"; }
+  addBtn.onclick = async () => {
+    let resp = await fetch("/api/pool/add", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({symbol: r.symbol, name: r.name, confirm_low_score: false}),
+    });
+    if (resp.status === 409) {
+      const j = await resp.json();
+      if (!confirm("该标的存在风险:\n- " + (j.reasons||[]).join("\n- ") + "\n\n确认仍要加入？")) return;
+      resp = await fetch("/api/pool/add", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({symbol: r.symbol, name: r.name, confirm_low_score: true}),
+      });
+    }
+    if (resp.ok) { addBtn.disabled = true; addBtn.textContent = "已加入"; }
+  };
+}
+
+async function load() {
+  const r = await (await fetch(`/api/stock/${SYMBOL}`)).json();
+  render(r);
+}
+
+refreshBtn.addEventListener("click", async () => {
+  refreshBtn.disabled = true;
+  refreshStatus.textContent = "正在更新...";
+  try {
+    const resp = await fetch(`/api/stock/${SYMBOL}/refresh`, {method: "POST"});
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "更新失败");
+    render(data.stock);
+    const okItems = Object.keys(data.refresh || {}).filter(k => data.refresh[k]);
+    const failedItems = Object.keys(data.refresh || {}).filter(k => !data.refresh[k]);
+    refreshStatus.textContent = `已尝试更新：成功 ${okItems.length} 项，失败 ${failedItems.length} 项`;
+  } catch (e) {
+    refreshStatus.textContent = `更新失败：${e.message || e}`;
+  } finally {
+    refreshBtn.disabled = false;
+  }
+});
+
+load();
+</script>
+{% endblock %}

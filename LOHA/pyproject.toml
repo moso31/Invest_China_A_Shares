@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loha"
+version = "0.1.0"
+description = "LOHA - Long-term A-share stock screening and trading interval planner"
+requires-python = ">=3.10"
+dependencies = [
+    "akshare",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["loha*"]
+
+[tool.setuptools.package-data]
+"loha" = ["templates/*.html", "static/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

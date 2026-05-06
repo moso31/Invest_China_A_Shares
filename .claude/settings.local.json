@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(d:/Github/Invest_China_A_Shares/.venv/Scripts/python.exe -c \"import sys; print\\(sys.version\\); import akshare, pandas, fastapi, uvicorn, jinja2, pyarrow; print\\('akshare:', akshare.__version__\\)\")"
+    ]
+  }
+}

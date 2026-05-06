@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}LOHA - 概览{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>LOHA</h1>
+  <p class="subtitle">长线 A 股 选股 + 交易区间 规划工具</p>
+  <p class="lead">
+    依据 <em>企业质量 + 分红现金流 + 估值修复 + 波动收益</em> 的逻辑，<br/>
+    自动给出策略适配分、估值带、利好/风险信号和做T参考区间。
+  </p>
+  <div class="cta">
+    <a class="button primary" href="/screener">开始机器选股 →</a>
+    <a class="button" href="/pool">查看本地股票池</a>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>行业过滤</h3>
+    <p class="muted">勾选不想纳入机器选股结果的行业。保存后，机器选股列表会自动排除这些行业。</p>
+    <div id="industryFilter" class="filter-list">
+      <span class="muted">读取行业列表...</span>
+    </div>
+    <div class="row" style="margin-top:1em">
+      <button id="saveIndustryFilter" class="button primary">保存过滤器</button>
+      <span id="industryFilterStatus" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h3>1️⃣ 机器选股</h3>
+    <p>对 {{ config.universe_size }} 个标的，应用硬门槛（剔除 ST / 低流动性），按 estimate.md 的策略适配分排序。</p>
+  </div>
+  <div class="card">
+    <h3>2️⃣ 人工审核</h3>
+    <p>逐条查看 Top-N，把认可的股票一键加入本地股票池。低分或带风险标识时会弹出确认，低估等正面信号单独展示。</p>
+  </div>
+  <div class="card">
+    <h3>3️⃣ 估值区间</h3>
+    <p>按行业 bucket 选择 PE/PB/DDM/NAV 等估值方法，结合 fair_mid 和 60 日波动带给出做T下沿与上沿。</p>
+  </div>
+  <div class="card">
+    <h3>权重</h3>
+    <table class="kv">
+      <tr><td><span class="factor-help" data-tooltip="Q = 企业质量复核项。用于人工复核和价值陷阱识别，不直接进入策略适配分。">企业质量 Q</span></td><td>{{ config.weights.Q }}</td></tr>
+      <tr><td><span class="factor-help" data-tooltip="D = dividend_score。按5年加权股息率、分红率风险过滤、现金流覆盖、ROE 稳定性合成。">分红质量 D</span></td><td>{{ config.weights.D }}</td></tr>
+      <tr><td><span class="factor-help" data-tooltip="V = value_score。按 estimate.md 行业 bucket 选择 PE/PB/DDM/NAV 等主估值方法，输出估值带和安全边际。">估值安全 V</span></td><td>{{ config.weights.V }}</td></tr>
+      <tr><td><span class="factor-help" data-tooltip="T = t_score。按 60 日年化波动、20 日成交额、Beta 和 60 日趋势判断小幅做T适配度。">交易可操作 T</span></td><td>{{ config.weights.T }}</td></tr>
+      <tr><td><span class="factor-help" data-tooltip="R = 风险复核项。高风险会触发加仓确认，不直接扣策略适配分。">风险复核 R</span></td><td>{{ config.weights.R }}</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h3>每股预算</h3>
+    <p class="big">¥{{ '{:,}'.format(config.budget) }}</p>
+    <p>底仓 {{ (config.core_ratio * 100)|round|int }}%，网格仓 {{ (config.grid_ratio * 100)|round|int }}%。低于 ¥5：每档 200 股；不低于 ¥5：每档 100 股。</p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const industryBox = document.getElementById("industryFilter");
+const saveBtn = document.getElementById("saveIndustryFilter");
+const statusEl = document.getElementById("industryFilterStatus");
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+async function loadIndustryFilter() {
+  const r = await (await fetch("/api/settings/industry-filter")).json();
+  const excluded = new Set(r.excluded_industries || []);
+  const industries = r.industries || [];
+  if (!industries.length) {
+    industryBox.innerHTML = `<span class="muted">暂无行业列表。先执行一次机器选股或全 A 股扫描后会自动生成。</span>`;
+    return;
+  }
+  industryBox.innerHTML = industries.map(ind => `
+    <label class="check-item">
+      <input type="checkbox" value="${escapeHtml(ind)}" ${excluded.has(ind) ? "checked" : ""} />
+      <span>${escapeHtml(ind)}</span>
+    </label>
+  `).join("");
+}
+
+async function saveIndustryFilter() {
+  const excluded = Array.from(industryBox.querySelectorAll("input:checked")).map(x => x.value);
+  await fetch("/api/settings/industry-filter", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({excluded_industries: excluded}),
+  });
+  statusEl.textContent = `已保存，当前排除 ${excluded.length} 个行业`;
+}
+
+saveBtn.addEventListener("click", saveIndustryFilter);
+loadIndustryFilter();
+</script>
+{% endblock %}

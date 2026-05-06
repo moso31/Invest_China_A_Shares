@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}LOHA - 本地股票池{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>本地股票池</h1>
+  <p class="muted">按 25% 底仓 + 75% 网格仓规划。加入价用于计算卖飞线和止损线；每行点击代码进入详情。</p>
+</section>
+
+<section>
+  <table class="data-table" id="poolTable">
+    <thead>
+      <tr>
+        <th>代码</th>
+        <th>名称</th>
+        <th>当前分</th>
+        <th>操作建议</th>
+        <th>当前价</th>
+        <th>加入价</th>
+        <th>卖飞线</th>
+        <th>止损线</th>
+        <th>估值带</th>
+        <th>ATR%</th>
+        <th>每档</th>
+        <th>网格档数</th>
+        <th>底仓档数</th>
+        <th>加入分</th>
+        <th>加入日期</th>
+        <th>当前风险</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="poolBody">
+      <tr><td colspan="17" class="muted center">加载中...</td></tr>
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const tbody = document.getElementById("poolBody");
+
+const bandLabel = {
+  cheap: "低估带",
+  neutral: "中性带",
+  expensive: "偏贵带",
+  unknown: "—",
+};
+
+async function load() {
+  const r = await (await fetch("/api/pool")).json();
+  const rows = r.pool || [];
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="17" class="muted center">股票池为空，到 <a href="/screener">机器选股</a> 添加。</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(p => {
+    const iv = p.interval || {};
+    const score = p.current_score || {};
+    const action = p.action || {};
+    const budget = iv.budget_plan || {};
+    const plan = p.pool_plan || {};
+    const flags = (action.current_flags && action.current_flags.length) ? action.current_flags : (p.flags_at_add||[]);
+    return `
+      <tr>
+        <td><a href="/stock/${p.symbol}">${p.symbol}</a></td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="${scoreClass(score.score || 0)}">${score.score ?? "—"}</td>
+        <td><span class="action-pill">${escapeHtml(action.action || "—")}</span></td>
+        <td>${iv.last_price ?? "—"}</td>
+        <td>${plan.entry_price ?? "—"}</td>
+        <td>${plan.sell_fly_line ?? "—"}</td>
+        <td>${plan.stop_loss_line ?? "—"}</td>
+        <td><span class="band band-${iv.band||'unknown'}">${bandLabel[iv.band] || "—"}</span></td>
+        <td>${iv.atr_pct ?? "—"}</td>
+        <td>${iv.lot_size || "—"} 股</td>
+        <td>${plan.grid_lots ?? budget.tactical_lots ?? "—"}</td>
+        <td>${plan.core_lots ?? "—"}</td>
+        <td>${Number(p.score_at_add).toFixed(1)}</td>
+        <td>${p.added_at}</td>
+        <td class="flags">${flags.map(f => `<span class="flag risk">${escapeHtml(f)}</span>`).join("")}</td>
+        <td><button class="button danger" data-sym="${p.symbol}">移除</button></td>
+      </tr>
+    `;
+  }).join("");
+  tbody.querySelectorAll("button.danger").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm(`从股票池移除 ${b.dataset.sym}？`)) return;
+    await fetch("/api/pool/remove", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({symbol: b.dataset.sym}),
+    });
+    load();
+  }));
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function scoreClass(score) {
+  if (score >= 70) return "score-good";
+  if (score >= 50) return "score-mid";
+  return "score-bad";
+}
+
+load();
+</script>
+{% endblock %}

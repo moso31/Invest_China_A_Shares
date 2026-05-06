@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}LOHA{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">LOHA</a>
+    <nav>
+      <a href="/" class="{{ 'active' if active=='home' else '' }}">概览</a>
+      <a href="/screener" class="{{ 'active' if active=='screener' else '' }}">机器选股</a>
+      <a href="/pool" class="{{ 'active' if active=='pool' else '' }}">本地股票池</a>
+      <a href="/debug" class="{{ 'active' if active=='debug' else '' }}">调试功能</a>
+    </nav>
+  </header>
+  <main>
+    {% if eastmoney_settings %}
+    <div
+      id="eastmoneySettings"
+      class="notice {{ '' if eastmoney_settings.configured else 'warning' }}"
+      data-configured="{{ '1' if eastmoney_settings.configured else '0' }}"
+    >
+      <div class="notice-copy">
+        <strong id="eastmoneyNid18Title">{{ eastmoney_settings.title }}</strong>
+        <span id="eastmoneyNid18Hint">{{ eastmoney_settings.message }}</span>
+      </div>
+      <form id="eastmoneyNid18Form" class="notice-form" autocomplete="off">
+        <input id="eastmoneyNid18Input" type="password" placeholder="粘贴新的 nid18" />
+        <button class="button" type="submit">更新</button>
+        <button id="eastmoneyNid18Clear" class="button" type="button">清除</button>
+        <span id="eastmoneyNid18Status" class="muted"></span>
+      </form>
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>Strategy Fit = 0.45D + 0.35V + 0.20T · 估值规则：estimate.md · 数据：AKShare</small>
+  </footer>
+  <script>
+  (() => {
+    const box = document.getElementById("eastmoneySettings");
+    if (!box) return;
+    const form = document.getElementById("eastmoneyNid18Form");
+    const input = document.getElementById("eastmoneyNid18Input");
+    const clearBtn = document.getElementById("eastmoneyNid18Clear");
+    const titleEl = document.getElementById("eastmoneyNid18Title");
+    const hintEl = document.getElementById("eastmoneyNid18Hint");
+    const statusEl = document.getElementById("eastmoneyNid18Status");
+
+    function render(state) {
+      box.classList.toggle("warning", !state.configured);
+      titleEl.textContent = state.title;
+      hintEl.textContent = state.message;
+      input.value = "";
+    }
+
+    async function save(nid18) {
+      statusEl.textContent = "更新中...";
+      const resp = await fetch("/api/settings/eastmoney-nid18", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({nid18}),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        statusEl.textContent = err.detail || "更新失败";
+        return;
+      }
+      const state = await resp.json();
+      render(state);
+      statusEl.textContent = state.configured ? "已更新" : "已清除";
+      setTimeout(() => { statusEl.textContent = ""; }, 2400);
+    }
+
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      save(input.value.trim());
+    });
+    clearBtn.addEventListener("click", () => save(""));
+  })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

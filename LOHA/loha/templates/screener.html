@@ -1,0 +1,694 @@
+{% extends "base.html" %}
+{% block title %}LOHA - 机器选股{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>机器选股</h1>
+  <div class="row">
+    <label>显示 Top
+      <input id="topN" type="number" value="20" min="1" max="500" />
+    </label>
+    <button id="runBtn" class="button primary">开始扫描</button>
+    <button id="fullScanFastBtn" class="button">强制更新全 A 股数据：快速</button>
+    <button id="fullScanFullBtn" class="button">强制更新全 A 股数据：完全</button>
+    <div class="progress-box scan-progress">
+      <div class="progress-head">
+        <span id="progress" class="muted">等待扫描</span>
+        <span id="progressPercent" class="progress-percent">0%</span>
+      </div>
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+    </div>
+  </div>
+  <div class="full-scan-status">
+    <p class="muted" id="fullScanMeta">最后一次成功全盘扫描：读取中...</p>
+    <button id="fullScanDetailBtn" class="button" type="button" hidden>显示数据详情</button>
+  </div>
+</section>
+
+<section class="filter-panel">
+  <div class="filter-toolbar">
+    <label class="search-box">搜索代码/名称
+      <input id="stockSearch" type="search" placeholder="例如：贵州茅台 / 600519" />
+    </label>
+    <button id="resetFiltersBtn" class="button">重置筛选</button>
+    <span id="filterSummary" class="muted">筛选结果：—</span>
+  </div>
+
+  <div class="range-grid" id="rangeFilters">
+    <label class="range-field">最新价
+      <span><input data-range-key="price" data-range-side="min" type="number" step="0.01" placeholder="最小" /><input data-range-key="price" data-range-side="max" type="number" step="0.01" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">总分
+      <span><input data-range-key="score" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="score" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">Q
+      <span><input data-range-key="Q" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="Q" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">D
+      <span><input data-range-key="D" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="D" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">V
+      <span><input data-range-key="V" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="V" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">T
+      <span><input data-range-key="T" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="T" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">R
+      <span><input data-range-key="R" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="R" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">ATR
+      <span><input data-range-key="atr" data-range-side="min" type="number" step="0.001" placeholder="最小" /><input data-range-key="atr" data-range-side="max" type="number" step="0.001" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">ATR%
+      <span><input data-range-key="atr_pct" data-range-side="min" type="number" step="0.1" placeholder="最小" /><input data-range-key="atr_pct" data-range-side="max" type="number" step="0.1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">利好数
+      <span><input data-range-key="good_count" data-range-side="min" type="number" step="1" placeholder="最小" /><input data-range-key="good_count" data-range-side="max" type="number" step="1" placeholder="最大" /></span>
+    </label>
+    <label class="range-field">风险数
+      <span><input data-range-key="risk_count" data-range-side="min" type="number" step="1" placeholder="最小" /><input data-range-key="risk_count" data-range-side="max" type="number" step="1" placeholder="最大" /></span>
+    </label>
+  </div>
+
+  <div class="filter-options">
+    <details open>
+      <summary>估值带</summary>
+      <div class="checkbox-grid compact" id="bandFilters"></div>
+    </details>
+    <details>
+      <summary>行业</summary>
+      <div class="filter-actions">
+        <button id="selectAllIndustriesBtn" class="button" type="button">全选行业</button>
+        <button id="clearIndustriesBtn" class="button" type="button">清空行业</button>
+      </div>
+      <div class="checkbox-grid" id="industryFilters"></div>
+    </details>
+  </div>
+</section>
+
+<section>
+  <table class="data-table" id="resultsTable">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>代码</th>
+        <th>名称</th>
+        <th><span class="factor-help" data-tooltip="最新价：来自本地缓存的最近一个交易日收盘价，用于辅助判断当前价格位置。">最新价</span></th>
+        <th><span class="factor-help" data-tooltip="总分即策略适配分 = 0.45D + 0.35V + 0.20T。Q 与 R 保留为复核项，风险红旗单独提示，不直接进入总分。">总分</span></th>
+        <th><span class="factor-help" data-tooltip="Q = 企业质量复核项。由 ROE、经营现金流/净利润、净利率、毛利率、负债率、收入/利润增长等合成，用于识别价值陷阱和人工复核。">Q</span></th>
+        <th><span class="factor-help" data-tooltip="D = dividend_score，权重 45%。按5年加权股息率 60 分、分红率风险过滤 10 分、经营现金流覆盖 15 分、ROE 稳定性 15 分合成。">D</span></th>
+        <th><span class="factor-help" data-tooltip="V = value_score，权重 35%。先按 estimate.md 的行业 bucket 选择 PE/PB/DDM/NAV 等主估值方法，再用对应历史分位和估值中枢计算安全边际。">V</span></th>
+        <th><span class="factor-help" data-tooltip="T = t_score，权重 20%。按 60 日年化波动、20 日成交额、Beta 接近 1、60 日非单边趋势评分，用于判断小幅做T适配度。">T</span></th>
+        <th><span class="factor-help" data-tooltip="R = 风险复核项。检查：近3年≥2年亏损(+35)、营收/净利连续下滑(+35/+30)、商誉占净资产>30%(+20)、现金流连续2年偏低(+20)、应收/存货异常(+10)、总市值<30亿(+10)；房地产另检查现金短债比。R 不直接扣总分，红旗会影响加仓确认。">R</span></th>
+        <th><span class="factor-help" data-tooltip="当前估值带：优先看估值安全边际，其次看 bucket 主估值分位。安全边际充足或分位≤20% 为低估带；高于中枢或分位≥80% 为偏贵带。">估值带</span></th>
+        <th><span class="factor-help" data-tooltip="ATR：ATR(20) 及其占当前价比例。用于判断网格间距和机动仓波动空间。">ATR</span></th>
+        <th>行业</th>
+        <th>利好信号</th>
+        <th>风险信号</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="resultsBody">
+      <tr><td colspan="16" class="muted center">尚未扫描。点击“开始扫描”加载数据。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<dialog id="confirmDlg">
+  <form method="dialog">
+    <h3>确认加入股票池？</h3>
+    <p>该标的存在以下风险或低分：</p>
+    <ul id="confirmReasons"></ul>
+    <p>是否仍要加入？</p>
+    <menu class="dialog-actions">
+      <button value="cancel">取消</button>
+      <button id="confirmAdd" value="confirm" class="button primary">确认加入</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="fullScanDetailDlg" class="wide-dialog">
+  <form method="dialog">
+    <h3>全盘扫描数据详情</h3>
+    <div id="fullScanDetailBody" class="detail-body"></div>
+    <menu class="dialog-actions">
+      <button class="button primary" value="close">关闭</button>
+    </menu>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const runBtn = document.getElementById("runBtn");
+const fullScanFastBtn = document.getElementById("fullScanFastBtn");
+const fullScanFullBtn = document.getElementById("fullScanFullBtn");
+const topNEl = document.getElementById("topN");
+const progEl = document.getElementById("progress");
+const progPctEl = document.getElementById("progressPercent");
+const progFillEl = document.getElementById("progressFill");
+const fullScanMetaEl = document.getElementById("fullScanMeta");
+const fullScanDetailBtn = document.getElementById("fullScanDetailBtn");
+const fullScanDetailDlg = document.getElementById("fullScanDetailDlg");
+const fullScanDetailBody = document.getElementById("fullScanDetailBody");
+const stockSearchEl = document.getElementById("stockSearch");
+const filterSummaryEl = document.getElementById("filterSummary");
+const resetFiltersBtn = document.getElementById("resetFiltersBtn");
+const bandFiltersEl = document.getElementById("bandFilters");
+const industryFiltersEl = document.getElementById("industryFilters");
+const selectAllIndustriesBtn = document.getElementById("selectAllIndustriesBtn");
+const clearIndustriesBtn = document.getElementById("clearIndustriesBtn");
+const tbody  = document.getElementById("resultsBody");
+const dlg    = document.getElementById("confirmDlg");
+const reasonsUl = document.getElementById("confirmReasons");
+let pendingAdd = null;
+let allRows = [];
+let filteredRows = [];
+let lastFullScanMeta = null;
+const FULL_RESULT_LIMIT = 10000;
+
+async function runScreen() {
+  runBtn.disabled = true;
+  fullScanFastBtn.disabled = true;
+  fullScanFullBtn.disabled = true;
+  const params = new URLSearchParams({mode: "all"});
+  await fetch(`/api/screener/run?${params.toString()}`, {method: "POST"});
+  poll();
+}
+
+async function runFullScan(refreshMode) {
+  const fastMsg = "全 A 股快速强制更新会保留单股原始缓存，只刷新候选池快照并确保批量宽表可用；评分逻辑仍然是完整 Q/D/V/T/R。确认开始？";
+  const completeMsg = "全 A 股完全强制更新会清理本地行情/财务/估值/分红缓存，并重新抓取所有通过预筛股票的数据，可能耗时数十分钟甚至更久。确认开始？";
+  const ok = confirm(refreshMode === "complete" ? completeMsg : fastMsg);
+  if (!ok) return;
+  runBtn.disabled = true;
+  fullScanFastBtn.disabled = true;
+  fullScanFullBtn.disabled = true;
+  await fetch(`/api/screener/full-scan/run?refresh_mode=${refreshMode}`, {method: "POST"});
+  poll();
+}
+
+async function poll() {
+  const r = await (await fetch("/api/screener/progress")).json();
+  syncFullScanDetailFromProgress(r);
+  const current = r.current_symbol ? ` · ${r.current_symbol}` : "";
+  if (r.state === "running") {
+    const scope = r.mode === "debug_recompute"
+      ? "调试重算评分缓存"
+      : `全A股 ${r.prefiltered_total}/${r.source_total} 只进入深度评分`;
+    setScanProgress(r, `${scope} · 深度评分 ${r.done}/${r.total} · 入选 ${r.accepted} · 剔除 ${r.rejected} · 失败 ${r.failed} · ${r.elapsed_s}s${current}`);
+    setTimeout(poll, 800);
+  } else if (r.state === "done") {
+    const scope = r.mode === "debug_recompute"
+      ? "调试重算评分缓存"
+      : r.mode === "all"
+      ? `${r.cache_used ? "复用本地全盘扫描" : "全A股预筛"} ${r.prefiltered_total}/${r.source_total}`
+      : "全A股";
+    setScanProgress(r, `${scope} · 深度评分 ${r.done}/${r.total} · 入选 ${r.accepted} · 剔除 ${r.rejected} · 失败 ${r.failed} · 完成 · 用时 ${r.elapsed_s}s`, 100);
+    runBtn.disabled = false;
+    fullScanFastBtn.disabled = false;
+    fullScanFullBtn.disabled = false;
+    await loadResults();
+    await loadFullScanMeta();
+  } else if (r.state === "error") {
+    setScanProgress(r, `错误：${r.error}`);
+    runBtn.disabled = false;
+    fullScanFastBtn.disabled = false;
+    fullScanFullBtn.disabled = false;
+  } else {
+    runBtn.disabled = false;
+    fullScanFastBtn.disabled = false;
+    fullScanFullBtn.disabled = false;
+  }
+}
+
+function setScanProgress(r, text, forcedPercent=null) {
+  const pct = forcedPercent !== null
+    ? forcedPercent
+    : r.total ? Math.max(0, Math.min(100, Math.round(r.done / r.total * 100))) : 0;
+  progEl.textContent = text;
+  progPctEl.textContent = `${pct}%`;
+  progFillEl.style.width = `${pct}%`;
+}
+
+function syncFullScanDetailFromProgress(r) {
+  if (!r.current_full_scan || r.mode !== "all") return;
+  if (r.state === "done") {
+    if (lastFullScanMeta && lastFullScanMeta.status === "扫描中") {
+      lastFullScanMeta = r.current_full_scan;
+      updateFullScanMetaText(lastFullScanMeta);
+      fullScanDetailBtn.hidden = false;
+      if (fullScanDetailDlg.open) renderFullScanDetails();
+    }
+    return;
+  }
+  if (r.state !== "running" && r.state !== "error") return;
+  lastFullScanMeta = r.current_full_scan;
+  updateFullScanMetaText(lastFullScanMeta);
+  fullScanDetailBtn.hidden = false;
+  if (fullScanDetailDlg.open) renderFullScanDetails();
+}
+
+function scanDuration(m) {
+  return m && m.duration_s !== undefined && m.duration_s !== null ? m.duration_s : m.elapsed_s;
+}
+
+function updateFullScanMetaText(m) {
+  const recompute = m.last_recompute_at ? ` · 最后调试重算 ${m.last_recompute_at}` : "";
+  const mode = m.refresh_mode_label || (m.refresh_mode === "complete" ? "完全更新" : "快速更新");
+  const duration = n(scanDuration(m), 1);
+  const sourceTotal = m.source_total || 0;
+  const prefilteredTotal = m.prefiltered_total || 0;
+  const done = m.done || 0;
+  const total = m.total || 0;
+  const accepted = m.accepted || 0;
+  const rejected = m.rejected || 0;
+  const failed = m.failed || 0;
+  if (m.status === "扫描中") {
+    fullScanMetaEl.textContent = `正在扫描：${mode} · 已用 ${duration}s · 全市场 ${sourceTotal} · 预筛通过 ${prefilteredTotal} · 深度评分 ${done}/${total} · 入选 ${accepted} · 剔除 ${rejected} · 失败 ${failed}`;
+  } else if (m.status === "扫描失败") {
+    fullScanMetaEl.textContent = `扫描失败：${mode} · 已用 ${duration}s · 全市场 ${sourceTotal} · 预筛通过 ${prefilteredTotal} · 深度评分 ${done}/${total} · 入选 ${accepted} · 剔除 ${rejected} · 失败 ${failed}`;
+  } else {
+    fullScanMetaEl.textContent = `扫描完毕：${m.success_at || m.updated_at || "—"} · ${mode} · 用时 ${duration}s · 全市场 ${sourceTotal} · 预筛通过 ${prefilteredTotal} · 入选 ${accepted} · 剔除 ${rejected} · 失败 ${failed}${recompute}`;
+  }
+}
+
+async function loadFullScanMeta() {
+  const r = await (await fetch("/api/screener/full-scan/meta")).json();
+  const m = r.meta;
+  if (!m) {
+    if (lastFullScanMeta && lastFullScanMeta.status === "扫描中") {
+      updateFullScanMetaText(lastFullScanMeta);
+      fullScanDetailBtn.hidden = false;
+      if (fullScanDetailDlg.open) renderFullScanDetails();
+      setTimeout(loadFullScanMeta, 800);
+      return;
+    }
+    lastFullScanMeta = null;
+    fullScanMetaEl.textContent = "最后一次成功全盘扫描：暂无";
+    fullScanDetailBtn.hidden = true;
+    return;
+  }
+  lastFullScanMeta = m;
+  updateFullScanMetaText(m);
+  fullScanDetailBtn.hidden = false;
+  if (fullScanDetailDlg.open) renderFullScanDetails();
+}
+
+function renderFullScanDetails() {
+  const m = lastFullScanMeta;
+  if (!m) return;
+  const stats = m.request_stats || {};
+  const providers = stats.providers || [];
+  const endpoints = stats.endpoints || [];
+  const apiCalls = stats.api_calls || [];
+  const cacheRows = stats.cache || [];
+  const providerRows = providers.length ? providers.map(row => `
+    <tr>
+      <td>${escapeHtml(row.provider)}</td>
+      <td>${row.total || 0}</td>
+      <td>${row.success || 0}</td>
+      <td>${row.failed || 0}</td>
+      <td>${requestRate(row)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="5" class="muted center">未捕获到外部 HTTP 请求；可能命中缓存，或 AKShare 使用了非 requests 通道。</td></tr>`;
+  const apiRows = apiCalls.length ? apiCalls.map(row => `
+    <tr>
+      <td>${escapeHtml(row.provider)}</td>
+      <td>${escapeHtml(row.endpoint)}</td>
+      <td>${row.total || 0}</td>
+      <td>${row.success || 0}</td>
+      <td>${row.failed || 0}</td>
+      <td>${requestRate(row)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="6" class="muted center">本轮没有发起新的 AKShare/兜底接口调用。</td></tr>`;
+  const cacheTableRows = cacheRows.length ? cacheRows.map(row => `
+    <tr>
+      <td>${escapeHtml(row.kind)}</td>
+      <td>${row.reads || 0}</td>
+      <td>${row.hits || 0}</td>
+      <td>${row.stale_hits || 0}</td>
+      <td>${row.misses || 0}</td>
+      <td>${row.writes || 0}</td>
+      <td>${cacheRate(row)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="7" class="muted center">本轮没有记录到缓存读取。</td></tr>`;
+  const endpointRows = endpoints.length ? endpoints.map(row => `
+    <tr>
+      <td>${escapeHtml(row.provider)}</td>
+      <td>${escapeHtml(row.endpoint)}</td>
+      <td>${row.total || 0}</td>
+      <td>${row.success || 0}</td>
+      <td>${row.failed || 0}</td>
+      <td>${requestRate(row)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="6" class="muted center">无 endpoint 明细。</td></tr>`;
+  fullScanDetailBody.innerHTML = `
+    <table class="kv detail-kv">
+      <tr><td>状态</td><td>${escapeHtml(m.status || "扫描完毕")}</td></tr>
+      <tr><td>更新时间</td><td>${escapeHtml(m.success_at || m.updated_at || "进行中")}</td></tr>
+      <tr><td>更新模式</td><td>${escapeHtml(m.refresh_mode_label || m.refresh_mode || "—")}</td></tr>
+      <tr><td>总耗时</td><td>${n(scanDuration(m), 1)}s</td></tr>
+      <tr><td>候选池</td><td>全市场 ${m.source_total || 0} · 预筛通过 ${m.prefiltered_total || 0} · 深度评分 ${m.done || 0}/${m.total || 0}</td></tr>
+      <tr><td>结果</td><td>入选 ${m.accepted || 0} · 剔除 ${m.rejected || 0} · 失败 ${m.failed || 0}</td></tr>
+      <tr><td>当前进度</td><td>${escapeHtml(m.current_symbol || "—")}</td></tr>
+    </table>
+    <h4>外部 HTTP 请求统计</h4>
+    <table class="data-table compact-table">
+      <thead><tr><th>数据源</th><th>请求数</th><th>成功</th><th>失败</th><th>成功率</th></tr></thead>
+      <tbody>${providerRows}</tbody>
+    </table>
+    <h4>AKShare / 兜底接口调用</h4>
+    <table class="data-table compact-table">
+      <thead><tr><th>数据源</th><th>接口</th><th>调用数</th><th>成功</th><th>失败</th><th>成功率</th></tr></thead>
+      <tbody>${apiRows}</tbody>
+    </table>
+    <h4>本地缓存读取</h4>
+    <table class="data-table compact-table">
+      <thead><tr><th>缓存类型</th><th>读取</th><th>命中</th><th>过期命中</th><th>未命中</th><th>写入</th><th>命中率</th></tr></thead>
+      <tbody>${cacheTableRows}</tbody>
+    </table>
+    <h4>HTTP Endpoint 明细</h4>
+    <table class="data-table compact-table">
+      <thead><tr><th>数据源</th><th>Endpoint</th><th>请求数</th><th>成功</th><th>失败</th><th>成功率</th></tr></thead>
+      <tbody>${endpointRows}</tbody>
+    </table>
+  `;
+}
+
+function requestRate(row) {
+  const total = Number(row.total || 0);
+  if (!total) return "—";
+  return `${(Number(row.success || 0) / total * 100).toFixed(1)}%`;
+}
+
+function cacheRate(row) {
+  const reads = Number(row.reads || 0);
+  if (!reads) return "—";
+  return `${(Number(row.hits || 0) / reads * 100).toFixed(1)}%`;
+}
+
+async function loadResults() {
+  const r = await (await fetch(`/api/screener/results?limit=${FULL_RESULT_LIMIT}`)).json();
+  allRows = r.results || [];
+  buildFilterOptions(allRows);
+  applyFilters();
+}
+
+function scoreClass(score) {
+  if (score >= 70) return "score-good";
+  if (score >= 50) return "score-mid";
+  return "score-bad";
+}
+
+function clip(x, lo=0, hi=100) {
+  if (x === null || x === undefined || Number.isNaN(Number(x))) return 50;
+  return Math.max(lo, Math.min(hi, Number(x)));
+}
+
+function n(x, digits=1) {
+  if (x === null || x === undefined || Number.isNaN(Number(x))) return "—";
+  return Number(x).toFixed(digits);
+}
+
+function pctText(v) {
+  return v === null || v === undefined || Number.isNaN(Number(v)) ? "—" : `${n(v, 1)}%`;
+}
+
+function scoreTooltip(key, row) {
+  const c = (row.components || {});
+  const q = c.Q || {};
+  const d = c.D || {};
+  const v = c.V || {};
+  const t = c.T || {};
+  if (key === "score") {
+    return `策略适配分 = 0.45D + 0.35V + 0.20T = 0.45×${n(row.D)} + 0.35×${n(row.V)} + 0.20×${n(row.T)} = ${n(row.score)}。Q 与 R 保留为复核项，风险红旗单独提示。`;
+  }
+  if (key === "Q") {
+    const roe = q.ROE_median_3y !== undefined ? clip(20 + Number(q.ROE_median_3y) * 4) : 50;
+    const cash = q.OCF_over_NI_3y !== undefined ? clip(30 + Number(q.OCF_over_NI_3y) * 50) : 50;
+    const margin = q.net_margin !== undefined ? clip(40 + Number(q.net_margin) * 2) : 50;
+    const gross = q.gross_margin !== undefined ? clip(30 + Number(q.gross_margin) * 1.5) : 50;
+    const debt = q.debt_note ? 65 : (q.debt_ratio !== undefined ? clip(120 - Number(q.debt_ratio)) : 50);
+    const growthVals = [q.revenue_yoy, q.net_profit_yoy].filter(x => x !== undefined && x !== null && !Number.isNaN(Number(x))).map(Number);
+    const avgGrowth = growthVals.length ? growthVals.reduce((a,b)=>a+b,0) / growthVals.length : null;
+    const growth = avgGrowth === null ? 50 : clip(50 + avgGrowth * 2);
+    return `Q 企业质量 = 28%×ROE子分 + 25%×现金流子分 + 17%×净利率子分 + 10%×毛利率子分 + 10%×负债子分 + 10%×成长子分。当前：ROE三年中位数 ${pctText(q.ROE_median_3y)}→${n(roe)}；OCF/净利 ${n(q.OCF_over_NI_3y,2)}→${n(cash)}；净利率 ${pctText(q.net_margin)}→${n(margin)}；毛利率 ${pctText(q.gross_margin)}→${n(gross)}；负债率 ${pctText(q.debt_ratio)}→${n(debt)}；收入/净利成长均值 ${avgGrowth === null ? "—" : pctText(avgGrowth)}→${n(growth)}。合成 Q=${n(row.Q)}。`;
+  }
+  if (key === "D") {
+    return `D dividend_score = 5年加权股息率 X(60) + 分红率风险过滤 P_filter(10) + 现金流覆盖 F(15) + ROE 稳定性 S(15)。5年加权股息率 ${pctText(d.weighted_dividend_yield)}→${n(d.weighted_dividend_score)}；近3年分红率 ${pctText(d.payout_ratio_3y_avg)}→${n(d.payout_score)}；现金流覆盖 ${n(d.dividend_cash_coverage,2)}→${n(d.cash_coverage_score)}；ROE 5年标准差 ${pctText(d.roe_5y_std)}→${n(d.roe_stability_score)}。合成 D=${n(row.D)}。最新年股息率 ${pctText(d.dividend_yield)} 仅展示，不参与打分。`;
+  }
+  if (key === "V") {
+    const bucket = v.bucket_effective || v.bucket || "—";
+    return `V value_score：行业 bucket=${bucket}，方法=${v.method || "—"}。主分位 ${pctText(v.primary_percentile)}，PE分位 ${pctText(v.pe_percentile_5y)}，PB分位 ${pctText(v.pb_percentile_5y)}；估值带 low/mid/high = ${n(v.fair_low,2)} / ${n(v.fair_mid,2)} / ${n(v.fair_high,2)}；安全边际 ${pctText(v.margin_of_safety_pct)}。分位越低、当前价相对中枢越便宜，V 越高。合成 V=${n(row.V)}。`;
+  }
+  if (key === "T") {
+    const amount = Number(t.avg_turnover_cny || 0);
+    return `T t_score = 波动率子分(40) + 流动性子分(30) + Beta子分(20) + 震荡子分(10)。当前 60日年化波动 ${pctText(t.vol_60d_annual_pct)}→${n(t.volatility_score)}；20日日均成交额 ${n(amount / 10000,1)}万→${n(t.liquidity_score)}；Beta ${n(t.beta_60d,2)}→${n(t.beta_score)}；60日涨跌幅 ${pctText(t.ret_60d_pct)}→${n(t.trend_score)}。合成 T=${n(row.T)}。`;
+  }
+  if (key === "R") {
+    return `R 风险复核项：营收连续下滑约 +35，净利润连续下滑约 +30，现金流/净利润过低约 +20，应收或存货异常约 +10。当前 R=${n(row.R)}；R 不再直接扣总分，但高风险会触发加仓确认。`;
+  }
+  return "";
+}
+
+function scoreSpan(key, value, row, strong=false) {
+  const text = strong ? `<strong>${value}</strong>` : value;
+  return `<span class="factor-help" data-tooltip="${escapeAttr(scoreTooltip(key, row))}">${text}</span>`;
+}
+
+function valuationBand(row) {
+  const v = ((row.components || {}).V || {});
+  const pct = Number(v.primary_percentile ?? v.valuation_percentile);
+  const mos = Number(v.margin_of_safety_pct);
+  const bucket = v.bucket_effective || v.bucket || "—";
+  const baseTip = `bucket=${bucket}；方法=${v.method || "—"}；主分位 ${Number.isNaN(pct) ? "—" : pctText(pct)}；安全边际 ${Number.isNaN(mos) ? "—" : pctText(mos)}；fair_mid ${n(v.fair_mid, 2)}`;
+  if (Number.isNaN(pct) && Number.isNaN(mos)) return {key: "unknown", label: "—", tip: "缺少估值分位和中枢数据"};
+  if ((!Number.isNaN(mos) && mos >= 15) || (!Number.isNaN(pct) && pct <= 20)) return {key: "cheap", label: "低估带", tip: baseTip};
+  if ((!Number.isNaN(mos) && mos <= -10) || (!Number.isNaN(pct) && pct >= 80)) return {key: "expensive", label: "偏贵带", tip: baseTip};
+  return {key: "neutral", label: "中性带", tip: baseTip};
+}
+
+function bandCell(row) {
+  const b = valuationBand(row);
+  return `<span class="factor-help band band-${b.key}" data-tooltip="${escapeAttr(b.tip)}">${b.label}</span>`;
+}
+
+function atrCell(row) {
+  const t = ((row.components || {}).T || {});
+  const atr = t.ATR20;
+  const atrPct = t.ATR20_pct;
+  if (atr === undefined && atrPct === undefined) return "—";
+  const text = `${n(atr, 3)} / ${pctText(atrPct)}`;
+  const tip = `ATR(20)：${n(atr, 3)}\nATR%：${pctText(atrPct)}\n1.5%-4% 通常更适合机动仓网格；低于1%空间偏小，高于6%波动风险偏高。`;
+  return `<span class="factor-help" data-tooltip="${escapeTooltipAttr(tip)}">${text}</span>`;
+}
+
+function signalTooltip(flags, emptyText) {
+  if (!flags || !flags.length) return emptyText;
+  return flags.map((f, i) => `${i + 1}. ${f}`).join("\n");
+}
+
+function signalCount(flags, kind) {
+  const safeFlags = flags || [];
+  const isGood = kind === "good";
+  const emptyText = isGood ? "暂无利好信号" : "暂无风险信号";
+  const cls = isGood ? "good-count" : "risk-count";
+  return `<span class="factor-help signal-count ${cls}" data-tooltip="${escapeTooltipAttr(signalTooltip(safeFlags, emptyText))}">${safeFlags.length}</span>`;
+}
+
+function industryOf(row) {
+  return String((row.components && row.components.Q && row.components.Q.industry) || "").trim();
+}
+
+function metricValue(row, key) {
+  const t = ((row.components || {}).T || {});
+  if (key === "price") return Number(t.last_close);
+  if (key === "score") return Number(row.score);
+  if (["Q", "D", "V", "T", "R"].includes(key)) return Number(row[key]);
+  if (key === "atr") return Number(t.ATR20);
+  if (key === "atr_pct") return Number(t.ATR20_pct);
+  if (key === "good_count") return Number((row.good_flags || []).length);
+  if (key === "risk_count") return Number((row.risk_flags || row.flags || []).length);
+  return NaN;
+}
+
+function buildFilterOptions(rows) {
+  const bandOptions = [
+    ["cheap", "低估带"],
+    ["neutral", "中性带"],
+    ["expensive", "偏贵带"],
+    ["unknown", "未知"],
+  ];
+  if (!bandFiltersEl.dataset.ready) {
+    bandFiltersEl.innerHTML = bandOptions.map(([key, label]) => `
+      <label class="check-item"><input type="checkbox" data-filter-group="band" value="${key}" checked /><span>${label}</span></label>
+    `).join("");
+    bandFiltersEl.dataset.ready = "1";
+  }
+
+  const oldChecked = new Set(
+    [...industryFiltersEl.querySelectorAll("input[data-filter-group='industry']:checked")].map(x => x.value)
+  );
+  const hadIndustryOptions = industryFiltersEl.querySelectorAll("input[data-filter-group='industry']").length > 0;
+  const industries = [...new Set(rows.map(industryOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+  industryFiltersEl.innerHTML = industries.map(industry => {
+    const checked = !hadIndustryOptions || oldChecked.has(industry);
+    return `<label class="check-item"><input type="checkbox" data-filter-group="industry" value="${escapeAttr(industry)}" ${checked ? "checked" : ""} /><span title="${escapeAttr(industry)}">${escapeHtml(industry)}</span></label>`;
+  }).join("") || `<span class="muted">暂无行业数据</span>`;
+}
+
+function selectedValues(group) {
+  return new Set([...document.querySelectorAll(`input[data-filter-group="${group}"]:checked`)].map(x => x.value));
+}
+
+function passesRange(row) {
+  const keys = new Set([...document.querySelectorAll("[data-range-key]")].map(x => x.dataset.rangeKey));
+  for (const key of keys) {
+    const minEl = document.querySelector(`[data-range-key="${key}"][data-range-side="min"]`);
+    const maxEl = document.querySelector(`[data-range-key="${key}"][data-range-side="max"]`);
+    const min = minEl && minEl.value !== "" ? Number(minEl.value) : null;
+    const max = maxEl && maxEl.value !== "" ? Number(maxEl.value) : null;
+    if (min === null && max === null) continue;
+    const value = metricValue(row, key);
+    if (Number.isNaN(value)) return false;
+    if (min !== null && value < min) return false;
+    if (max !== null && value > max) return false;
+  }
+  return true;
+}
+
+function passesSearch(row) {
+  const term = stockSearchEl.value.trim().toLowerCase();
+  if (!term) return true;
+  return String(row.symbol || "").toLowerCase().includes(term)
+    || String(row.name || "").toLowerCase().includes(term);
+}
+
+function passesCategory(row) {
+  const selectedBands = selectedValues("band");
+  const band = valuationBand(row).key;
+  if (!selectedBands.has(band)) return false;
+
+  const industryInputs = [...document.querySelectorAll("input[data-filter-group='industry']")];
+  if (industryInputs.length) {
+    const selectedIndustries = selectedValues("industry");
+    if (!selectedIndustries.has(industryOf(row))) return false;
+  }
+  return true;
+}
+
+function applyFilters() {
+  filteredRows = allRows.filter(row => passesSearch(row) && passesRange(row) && passesCategory(row));
+  const limit = parseInt(topNEl.value, 10) || 20;
+  renderRows(filteredRows.slice(0, limit));
+  filterSummaryEl.textContent = `筛选结果：显示 ${Math.min(limit, filteredRows.length)} / ${filteredRows.length}，本地结果 ${allRows.length}`;
+}
+
+function resetFilters() {
+  stockSearchEl.value = "";
+  document.querySelectorAll("[data-range-key]").forEach(input => { input.value = ""; });
+  document.querySelectorAll("input[data-filter-group='band']").forEach(input => { input.checked = true; });
+  document.querySelectorAll("input[data-filter-group='industry']").forEach(input => { input.checked = true; });
+  applyFilters();
+}
+
+function latestPriceCell(row) {
+  const t = ((row.components || {}).T || {});
+  const price = t.last_close;
+  if (price === null || price === undefined || Number.isNaN(Number(price))) return "—";
+  const tip = `最新价：${n(price, 2)}\n来源：最近一个交易日收盘价。`;
+  return `<span class="factor-help" data-tooltip="${escapeTooltipAttr(tip)}">${n(price, 2)}</span>`;
+}
+
+function renderRows(rows) {
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="16" class="muted center">无结果。</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map((r, i) => `
+    <tr>
+      <td>${i+1}</td>
+      <td><a href="/stock/${r.symbol}">${r.symbol}</a></td>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${latestPriceCell(r)}</td>
+      <td class="${scoreClass(r.score)}">${scoreSpan("score", r.score, r, true)}</td>
+      <td>${scoreSpan("Q", r.Q, r)}</td>
+      <td>${scoreSpan("D", r.D, r)}</td>
+      <td>${scoreSpan("V", r.V, r)}</td>
+      <td>${scoreSpan("T", r.T, r)}</td>
+      <td>${scoreSpan("R", r.R, r)}</td>
+      <td>${bandCell(r)}</td>
+      <td>${atrCell(r)}</td>
+      <td>${escapeHtml(industryOf(r))}</td>
+      <td>${signalCount(r.good_flags || [], "good")}</td>
+      <td>${signalCount(r.risk_flags || r.flags || [], "risk")}</td>
+      <td><button class="button add" data-sym="${r.symbol}" data-name="${escapeAttr(r.name)}" data-score="${r.score}" data-flags="${escapeAttr(JSON.stringify(r.risk_flags||r.flags||[]))}">加入</button></td>
+    </tr>
+  `).join("");
+  tbody.querySelectorAll("button.add").forEach(b => b.addEventListener("click", onAddClick));
+}
+
+async function onAddClick(e) {
+  const b = e.currentTarget;
+  const sym = b.dataset.sym;
+  const name = b.dataset.name;
+  const flags = JSON.parse(b.dataset.flags);
+  const score = parseFloat(b.dataset.score);
+  const r = await postAdd({symbol: sym, name, confirm_low_score: false});
+  if (r.status === 409) {
+    const j = await r.json();
+    pendingAdd = {symbol: sym, name};
+    reasonsUl.innerHTML = (j.reasons||[]).map(x => `<li>${escapeHtml(x)}</li>`).join("");
+    dlg.returnValue = "";
+    dlg.showModal();
+  } else if (r.ok) {
+    b.disabled = true;
+    b.textContent = "已加入";
+  }
+}
+
+document.getElementById("confirmAdd").addEventListener("click", async () => {
+  if (!pendingAdd) return;
+  await postAdd({...pendingAdd, confirm_low_score: true});
+  pendingAdd = null;
+  loadResults();
+});
+
+async function postAdd(body) {
+  return fetch("/api/pool/add", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function escapeAttr(s) { return escapeHtml(s).replace(/'/g, "&#39;"); }
+function escapeTooltipAttr(s) { return escapeAttr(s).replace(/\n/g, "&#10;"); }
+
+runBtn.addEventListener("click", runScreen);
+fullScanFastBtn.addEventListener("click", () => runFullScan("fast"));
+fullScanFullBtn.addEventListener("click", () => runFullScan("complete"));
+topNEl.addEventListener("change", applyFilters);
+stockSearchEl.addEventListener("input", applyFilters);
+resetFiltersBtn.addEventListener("click", resetFilters);
+document.getElementById("rangeFilters").addEventListener("input", applyFilters);
+bandFiltersEl.addEventListener("change", applyFilters);
+industryFiltersEl.addEventListener("change", applyFilters);
+selectAllIndustriesBtn.addEventListener("click", () => {
+  industryFiltersEl.querySelectorAll("input[data-filter-group='industry']").forEach(input => { input.checked = true; });
+  applyFilters();
+});
+clearIndustriesBtn.addEventListener("click", () => {
+  industryFiltersEl.querySelectorAll("input[data-filter-group='industry']").forEach(input => { input.checked = false; });
+  applyFilters();
+});
+fullScanDetailBtn.addEventListener("click", () => {
+  renderFullScanDetails();
+  fullScanDetailDlg.showModal();
+});
+loadFullScanMeta();
+loadResults();
+poll();
+</script>
+{% endblock %}

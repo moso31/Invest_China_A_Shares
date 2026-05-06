@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(d:/Github/Invest_China_A_Shares/.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}

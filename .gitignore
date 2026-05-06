@@ -1,0 +1,12 @@
+# Python local environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local project data
+LOHA/data/cache/
+LOHA/data/eastmoney_nid18.txt
+
+/akshare
