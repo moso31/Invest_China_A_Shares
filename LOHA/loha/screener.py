@@ -573,12 +573,6 @@ def recompute_cached_full_scan(
     _progress.error = None
     _progress.results = None
 
-    if not old_rows:
-        _progress.state = "error"
-        _progress.error = "暂无全盘扫描结果缓存，无法执行调试重算。请先完成一次全 A 股扫描。"
-        _progress.results = []
-        return []
-
     context = source.cache_only() if cache_only else nullcontext()
 
     results: list[StockScore] = []
@@ -602,6 +596,14 @@ def recompute_cached_full_scan(
                 ]
                 source_total = int(old_meta.get("source_total", len(universe)))
                 prefiltered_total = int(old_meta.get("prefiltered_total", len(universe)))
+            if not universe:
+                _progress.state = "error"
+                _progress.error = (
+                    "暂无可重算的本地股票范围缓存。请先完成一次全 A 股快速或完全扫描，"
+                    "或确认 universe/realtime_snapshot 缓存仍存在。"
+                )
+                _progress.results = []
+                return []
 
             _progress.source_total = source_total
             _progress.prefiltered_total = prefiltered_total

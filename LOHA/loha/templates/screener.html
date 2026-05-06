@@ -95,10 +95,10 @@
         <th><span class="factor-help" data-tooltip="最新价：来自本地缓存的最近一个交易日收盘价，用于辅助判断当前价格位置。">最新价</span></th>
         <th><span class="factor-help" data-tooltip="总分即策略适配分 = 0.45D + 0.35V + 0.20T。Q 与 R 保留为复核项，风险红旗单独提示，不直接进入总分。">总分</span></th>
         <th><span class="factor-help" data-tooltip="Q = 企业质量复核项。由 ROE、经营现金流/净利润、净利率、毛利率、负债率、收入/利润增长等合成，用于识别价值陷阱和人工复核。">Q</span></th>
-        <th><span class="factor-help" data-tooltip="D = dividend_score，权重 45%。按5年加权股息率 60 分、分红率风险过滤 10 分、经营现金流覆盖 15 分、ROE 稳定性 15 分合成。">D</span></th>
+        <th><span class="factor-help" data-tooltip="D = dividend_score，权重 45%。按5年加权股息率 60 分、分红率风险过滤 10 分、OCF/净利润 10 分、自由现金流/分红覆盖 5 分、ROE 稳定性 15 分合成。">D</span></th>
         <th><span class="factor-help" data-tooltip="V = value_score，权重 35%。先按 estimate.md 的行业 bucket 选择 PE/PB/DDM/NAV 等主估值方法，再用对应历史分位和估值中枢计算安全边际。">V</span></th>
         <th><span class="factor-help" data-tooltip="T = t_score，权重 20%。按 60 日年化波动、20 日成交额、Beta 接近 1、60 日非单边趋势评分，用于判断小幅做T适配度。">T</span></th>
-        <th><span class="factor-help" data-tooltip="R = 风险复核项。检查：近3年≥2年亏损(+35)、营收/净利连续下滑(+35/+30)、商誉占净资产>30%(+20)、现金流连续2年偏低(+20)、应收/存货异常(+10)、总市值<30亿(+10)；房地产另检查现金短债比。R 不直接扣总分，红旗会影响加仓确认。">R</span></th>
+        <th><span class="factor-help" data-tooltip="R = 风险复核项。检查：近3年≥2年亏损(+35)、可比报告期营收/净利连续同比下滑(+35/+30)、商誉占净资产>30%(+20)、现金流连续2年偏低(+20)、应收/存货异常(+10)、总市值<30亿(+10)；房地产另检查现金短债比。R 不直接扣总分，红旗会影响加仓确认。">R</span></th>
         <th><span class="factor-help" data-tooltip="当前估值带：优先看估值安全边际，其次看 bucket 主估值分位。安全边际充足或分位≤20% 为低估带；高于中枢或分位≥80% 为偏贵带。">估值带</span></th>
         <th><span class="factor-help" data-tooltip="ATR：ATR(20) 及其占当前价比例。用于判断网格间距和机动仓波动空间。">ATR</span></th>
         <th>行业</th>
@@ -435,7 +435,7 @@ function scoreTooltip(key, row) {
     return `Q 企业质量 = 28%×ROE子分 + 25%×现金流子分 + 17%×净利率子分 + 10%×毛利率子分 + 10%×负债子分 + 10%×成长子分。当前：ROE三年中位数 ${pctText(q.ROE_median_3y)}→${n(roe)}；OCF/净利 ${n(q.OCF_over_NI_3y,2)}→${n(cash)}；净利率 ${pctText(q.net_margin)}→${n(margin)}；毛利率 ${pctText(q.gross_margin)}→${n(gross)}；负债率 ${pctText(q.debt_ratio)}→${n(debt)}；收入/净利成长均值 ${avgGrowth === null ? "—" : pctText(avgGrowth)}→${n(growth)}。合成 Q=${n(row.Q)}。`;
   }
   if (key === "D") {
-    return `D dividend_score = 5年加权股息率 X(60) + 分红率风险过滤 P_filter(10) + 现金流覆盖 F(15) + ROE 稳定性 S(15)。5年加权股息率 ${pctText(d.weighted_dividend_yield)}→${n(d.weighted_dividend_score)}；近3年分红率 ${pctText(d.payout_ratio_3y_avg)}→${n(d.payout_score)}；现金流覆盖 ${n(d.dividend_cash_coverage,2)}→${n(d.cash_coverage_score)}；ROE 5年标准差 ${pctText(d.roe_5y_std)}→${n(d.roe_stability_score)}。合成 D=${n(row.D)}。最新年股息率 ${pctText(d.dividend_yield)} 仅展示，不参与打分。`;
+    return `D dividend_score = 5年加权股息率 X(60) + 分红率风险过滤 P(10) + OCF/净利润 C(10) + 自由现金流/分红 F(5) + ROE 稳定性 S(15)。5年加权股息率 ${pctText(d.weighted_dividend_yield)}→${n(d.weighted_dividend_score)}；近3年分红率 ${pctText(d.payout_ratio_3y_avg)}→${n(d.payout_score)}；OCF/净利润 ${n(d.ocf_over_ni_3y,2)}→${n(d.cash_quality_score)}；FCF/分红 ${n(d.fcf_dividend_coverage,2)}→${n(d.fcf_coverage_score)}；ROE 5年标准差 ${pctText(d.roe_5y_std)}→${n(d.roe_stability_score)}。合成 D=${n(row.D)}。最新年股息率 ${pctText(d.dividend_yield)} 仅展示，不参与打分。`;
   }
   if (key === "V") {
     const bucket = v.bucket_effective || v.bucket || "—";
@@ -446,7 +446,7 @@ function scoreTooltip(key, row) {
     return `T t_score = 波动率子分(40) + 流动性子分(30) + Beta子分(20) + 震荡子分(10)。当前 60日年化波动 ${pctText(t.vol_60d_annual_pct)}→${n(t.volatility_score)}；20日日均成交额 ${n(amount / 10000,1)}万→${n(t.liquidity_score)}；Beta ${n(t.beta_60d,2)}→${n(t.beta_score)}；60日涨跌幅 ${pctText(t.ret_60d_pct)}→${n(t.trend_score)}。合成 T=${n(row.T)}。`;
   }
   if (key === "R") {
-    return `R 风险复核项：营收连续下滑约 +35，净利润连续下滑约 +30，现金流/净利润过低约 +20，应收或存货异常约 +10。当前 R=${n(row.R)}；R 不再直接扣总分，但高风险会触发加仓确认。`;
+    return `R 风险复核项：可比报告期营收连续同比下滑约 +35，净利润连续同比下滑约 +30，现金流/净利润过低约 +20，应收或存货异常约 +10。当前 R=${n(row.R)}；R 不再直接扣总分，但高风险会触发加仓确认。`;
   }
   return "";
 }

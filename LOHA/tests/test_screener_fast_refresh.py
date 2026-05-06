@@ -170,3 +170,39 @@ def test_current_cache_row_with_empty_dividend_sources_does_not_repair(monkeypat
     assert repaired is row
     assert changed is False
     assert score.symbol == "000001"
+
+
+def test_debug_recompute_can_rebuild_without_score_cache(monkeypatch):
+    monkeypatch.setattr(screener, "_cached_full_scan_rows", lambda: [])
+    monkeypatch.setattr(screener, "full_scan_meta", lambda: {})
+    monkeypatch.setattr(
+        screener,
+        "_build_universe",
+        lambda _mode: ([{"symbol": "000001", "name": "平安银行"}], 1, 1),
+    )
+    monkeypatch.setattr(
+        screener,
+        "_score_one",
+        lambda _row: (
+            "accepted",
+            screener.StockScore(
+                symbol="000001",
+                name="平安银行",
+                score=70.0,
+                Q=50.0,
+                D=80.0,
+                V=60.0,
+                T=70.0,
+                R=0.0,
+            ),
+        ),
+    )
+    written: list[tuple[str, str, object]] = []
+    monkeypatch.setattr(screener.cache, "put_json", lambda kind, data, key: written.append((kind, key, data)))
+
+    results = screener.recompute_cached_full_scan(cache_only=True)
+
+    assert len(results) == 1
+    assert screener.progress().state == "done"
+    assert screener.progress().accepted == 1
+    assert any(key == screener.FULL_SCAN_RESULTS_KEY for _, key, _ in written)

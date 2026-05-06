@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: loha
+Version: 0.1.0
+Summary: LOHA - Long-term A-share stock screening and trading interval planner
+Requires-Python: >=3.10
+Requires-Dist: akshare
+Requires-Dist: pandas>=2.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn[standard]>=0.27
+Requires-Dist: jinja2>=3.1

@@ -154,6 +154,31 @@ def _quick_period_values(metrics: dict | None, key: str, limit: int | None = Non
     return out[:limit] if limit else out
 
 
+def _same_period_yoy_streak(periods: list[tuple[str, float]], n: int) -> tuple[bool, list[tuple[str, float]]]:
+    """Return whether the latest n report periods are all negative YoY.
+
+    AKShare report-period values are usually year-to-date cumulative numbers,
+    so comparing 2026Q1 directly with 2025FY is invalid. Compare each period
+    with the same month/day one year earlier instead.
+    """
+    if len(periods) < 2 or n <= 0:
+        return False, []
+    by_period = {re.sub(r"\D", "", str(period)): value for period, value in periods}
+    yoy_values: list[tuple[str, float]] = []
+    for period, value in sorted(by_period.items(), reverse=True):
+        if len(period) != 8:
+            continue
+        prev_period = f"{int(period[:4]) - 1}{period[4:]}"
+        prev_value = by_period.get(prev_period)
+        if prev_value is None or prev_value == 0:
+            continue
+        yoy = (value - prev_value) / abs(prev_value) * 100
+        yoy_values.append((period, yoy))
+        if len(yoy_values) >= n:
+            break
+    return len(yoy_values) >= n and all(yoy < 0 for _, yoy in yoy_values), yoy_values
+
+
 def _quick_latest_annual_yoy(metrics: dict | None, yoy_key: str, value_key: str) -> float | None:
     if not metrics:
         return None
@@ -525,21 +550,42 @@ def dividend(symbol: str) -> FactorResult:
     fin = _load_financial_if_needed(symbol, fin)
     ocf_row = _find_indicator_row(fin, "经营现金流量净额", "经营现金流", "经营活动产生的现金流量净额")
     ni_row = _find_indicator_row(fin, "归母净利润", "归属于母公司", "净利润")
-    ocf_latest = (_row_period_values(ocf_row) or [(None, None)])[0][1]
-    ni_latest = (_quick_period_values(quick, "ni_by_period", limit=1) or _row_period_values(ni_row) or [(None, None)])[
-        0
-    ][1]
-    cash_coverage_score = 0.0
-    cash_coverage: float | None = None
-    if ocf_latest is not None and ni_latest is not None and ni_latest > 0 and payout_ratio_3y_avg is not None:
-        required_cash = ni_latest * (payout_ratio_3y_avg / 100)
-        if required_cash > 0:
-            cash_coverage = ocf_latest / required_cash
-            if cash_coverage >= 1.2:
-                cash_coverage_score = 15
-            elif cash_coverage >= 1.0:
-                cash_coverage_score = 8
-    components["dividend_cash_coverage"] = round(cash_coverage, 2) if cash_coverage is not None else None
+    ocf_annual = dict(_annual_only(_row_period_values(ocf_row))[:3])
+    ni_annual = dict(_quick_year_values(quick, "ni_by_year", limit=3))
+    if not ni_annual:
+        ni_annual = dict(_annual_only(_row_period_values(ni_row))[:3])
+    ocf_ni_ratios = [
+        ocf / ni_annual[period]
+        for period, ocf in ocf_annual.items()
+        if period in ni_annual and ni_annual[period] > 0
+    ]
+    ocf_over_ni_3y = float(np.mean(ocf_ni_ratios)) if ocf_ni_ratios else None
+    cash_quality_score = 0.0
+    if ocf_over_ni_3y is not None:
+        if ocf_over_ni_3y >= 1.0:
+            cash_quality_score = 10
+        elif ocf_over_ni_3y >= 0.8:
+            cash_quality_score = 6
+        elif ocf_over_ni_3y >= 0.5:
+            cash_quality_score = 3
+    components["ocf_over_ni_3y"] = round(ocf_over_ni_3y, 2) if ocf_over_ni_3y is not None else None
+
+    fcf_row = _find_indicator_row(fin, "每股企业自由现金流量", "每股股东自由现金流量")
+    fcf_annual = _annual_only(_row_period_values(fcf_row))
+    fcf_per_share = fcf_annual[0][1] if fcf_annual else None
+    fcf_dividend_coverage = None
+    fcf_coverage_score = 0.0
+    if fcf_per_share is not None and latest_dps > 0:
+        fcf_dividend_coverage = fcf_per_share / latest_dps
+        if fcf_dividend_coverage >= 1.2:
+            fcf_coverage_score = 5
+        elif fcf_dividend_coverage >= 1.0:
+            fcf_coverage_score = 3
+    cash_coverage_score = cash_quality_score + fcf_coverage_score
+    components["fcf_per_share"] = round(fcf_per_share, 4) if fcf_per_share is not None else None
+    components["fcf_dividend_coverage"] = (
+        round(fcf_dividend_coverage, 2) if fcf_dividend_coverage is not None else None
+    )
 
     roe_vals = [v for _, v in _quick_year_values(quick, "roe_by_year", limit=5)]
     if not roe_vals:
@@ -558,6 +604,8 @@ def dividend(symbol: str) -> FactorResult:
         {
             "latest_dps": round(latest_dps, 4),
             "payout_score": round(payout_score, 1),
+            "cash_quality_score": round(cash_quality_score, 1),
+            "fcf_coverage_score": round(fcf_coverage_score, 1),
             "cash_coverage_score": round(cash_coverage_score, 1),
             "roe_stability_score": round(roe_stability_score, 1),
             "dps_history": [round(v, 4) for v in dps_old_to_new],
@@ -567,8 +615,8 @@ def dividend(symbol: str) -> FactorResult:
     weighted_yield = metrics["dividend_yield"]
     if weighted_yield is not None and weighted_yield >= config.DIV_YIELD_FULL_CREDIT:
         good_flags.append(f"5年加权股息率 {weighted_yield:.1f}% 达到策略核心区间")
-    if payout_score >= 10 and cash_coverage_score >= 8:
-        good_flags.append("分红率与经营现金流覆盖较稳定")
+    if payout_score >= 10 and cash_quality_score >= 6 and (latest_dps <= 0 or fcf_coverage_score >= 3):
+        good_flags.append("分红率与现金流质量较稳定")
 
     listed_years = [year for year in target_years if listing_year is None or year >= listing_year]
     if any(float(div_by_year.get(year, 0.0)) <= 0 for year in listed_years):
@@ -580,7 +628,7 @@ def dividend(symbol: str) -> FactorResult:
                 flags.append("dividend_unstable：近 5 年每股分红出现大幅下调")
                 break
 
-    d = float(metrics["score"]) + payout_score + cash_coverage_score + roe_stability_score
+    d = float(metrics["score"]) + payout_score + cash_quality_score + fcf_coverage_score + roe_stability_score
     return FactorResult(round(d, 1), components, flags, good_flags)
 
 
@@ -743,41 +791,22 @@ def risk(symbol: str) -> FactorResult:
         rev_row = _find_indicator_row(fin, "营业总收入", "营业收入")
         ni_row = _find_indicator_row(fin, "归母净利润", "归属于母公司", "净利润")
         ocf_row = _find_indicator_row(fin, "经营现金流量净额", "经营现金流", "经营活动产生的现金流量净额")
-        ar_row = _find_indicator_row(fin, "应收账款", "应收票据及应收账款")
-        inv_row = _find_indicator_row(fin, "存货")
 
-        def _consecutive_decline(row: pd.Series | None, n: int) -> bool:
-            if row is None:
-                return False
-            periods = _row_period_values(row)[: n + 1]
-            if len(periods) < n + 1:
-                return False
-            vals = [v for _, v in periods]
-            return all(vals[i] < vals[i + 1] for i in range(n))
-
-        def _consecutive_decline_values(periods: list[tuple[str, float]], n: int) -> bool:
-            if len(periods) < n + 1:
-                return False
-            vals = [v for _, v in periods[: n + 1]]
-            return all(vals[i] < vals[i + 1] for i in range(n))
-
-        rev_decline = _consecutive_decline_values(
-            _quick_period_values(quick, "revenue_by_period", limit=config.REVENUE_DECLINE_QUARTERS + 1),
-            config.REVENUE_DECLINE_QUARTERS,
-        ) or _consecutive_decline(rev_row, config.REVENUE_DECLINE_QUARTERS)
-        ni_decline = _consecutive_decline_values(
-            _quick_period_values(quick, "ni_by_period", limit=config.NI_DECLINE_QUARTERS + 1),
-            config.NI_DECLINE_QUARTERS,
-        ) or _consecutive_decline(ni_row, config.NI_DECLINE_QUARTERS)
+        rev_periods = _quick_period_values(quick, "revenue_by_period") or _row_period_values(rev_row)
+        ni_periods = _quick_period_values(quick, "ni_by_period") or _row_period_values(ni_row)
+        rev_decline, rev_yoys = _same_period_yoy_streak(rev_periods, config.REVENUE_DECLINE_QUARTERS)
+        ni_decline, ni_yoys = _same_period_yoy_streak(ni_periods, config.NI_DECLINE_QUARTERS)
 
         if rev_decline:
             penalty += 35
-            flags.append(f"营业收入连续 {config.REVENUE_DECLINE_QUARTERS} 期下滑")
+            flags.append(f"revenue_decline_streak：营业收入连续 {config.REVENUE_DECLINE_QUARTERS} 个可比报告期同比下滑")
             components["revenue_decline"] = True
+            components["revenue_yoy_streak"] = [(period, round(yoy, 2)) for period, yoy in rev_yoys]
         if ni_decline:
             penalty += 30
-            flags.append(f"净利润连续 {config.NI_DECLINE_QUARTERS} 期下滑")
+            flags.append(f"net_profit_decline_streak：净利润连续 {config.NI_DECLINE_QUARTERS} 个可比报告期同比下滑")
             components["net_profit_decline"] = True
+            components["net_profit_yoy_streak"] = [(period, round(yoy, 2)) for period, yoy in ni_yoys]
 
         # loss_streak: ≥2 loss years in the last 3 annual periods
         ni_annual = _quick_year_values(quick, "ni_by_year", limit=3)
@@ -805,18 +834,6 @@ def risk(symbol: str) -> FactorResult:
                 penalty += 10
                 flags.append(f"最近年度经营现金流/净利润 {below[0][1]:.2f} 偏低")
 
-        # AR / inventory abnormal jump (>40% YoY proxy: latest vs 4 periods ago)
-        for label, row in (("应收账款", ar_row), ("存货", inv_row)):
-            if row is None:
-                continue
-            periods = _row_period_values(row)[:5]
-            if len(periods) >= 5 and periods[4][1] > 0:
-                growth = (periods[0][1] - periods[4][1]) / periods[4][1]
-                if growth > 0.4:
-                    penalty += 10
-                    flags.append(f"{label}同比增长 {growth * 100:.0f}%，需关注")
-                    components[f"{label}_yoy"] = round(growth, 2)
-
     # tiny_cap: total market cap < 30 亿
     info = source.individual_info(symbol) or {}
     total_mv = _to_num(info.get("总市值"))
@@ -836,6 +853,27 @@ def risk(symbol: str) -> FactorResult:
             if gw_ratio > 0.30:
                 penalty += 20
                 flags.append(f"goodwill_heavy：商誉占归母净资产 {gw_ratio * 100:.0f}%，超过 30%")
+
+    # AR / inventory abnormal jump, based on balance-sheet item balances.
+    if bs is not None and not bs.empty:
+        for flag_id, label, col in (
+            ("ar_anomaly", "应收账款", "ACCOUNTS_RECE"),
+            ("inventory_anomaly", "存货", "INVENTORY"),
+        ):
+            yoy_col = f"{col}_YOY"
+            if yoy_col in bs.columns and pd.notna(bs[yoy_col].iloc[0]):
+                yoy = float(bs[yoy_col].iloc[0])
+            elif col in bs.columns and len(bs) >= 2 and pd.notna(bs[col].iloc[0]) and pd.notna(bs[col].iloc[1]):
+                prev = float(bs[col].iloc[1])
+                yoy = (float(bs[col].iloc[0]) - prev) / abs(prev) * 100 if prev else None
+            else:
+                yoy = None
+            if yoy is None:
+                continue
+            components[f"{flag_id}_yoy_pct"] = round(yoy, 2)
+            if yoy > config.AR_INVENTORY_YOY_WARNING:
+                penalty += 10
+                flags.append(f"{flag_id}：{label}同比增长 {yoy:.0f}%，需关注利润质量")
 
     # Add ST/退 flag from name (set by screener via components if available)
     if components.get("name_st"):

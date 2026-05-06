@@ -5,6 +5,8 @@ description: 对单只 A 股计算估值带与策略适配分。策略基线为�
 
 # A 股估值技能
 
+本文件是 `Strategy.md` 的实现细则。统一口径为：机器排序只使用 `D/V/T` 三个连续分；`Q` 保留为企业质量复核项，能连续度量的现金流、ROE 稳定性、负债与成长退化吸收到 `D/V`；`R` 只输出风险 flags 和加仓门控，不作为线性扣分项进入总分。
+
 ## 0. 何时使用
 
 调用本技能当且仅当满足:
@@ -31,6 +33,7 @@ class StockInput:
     equity: float                  # 归母净资产
     ocf_ttm: float                 # 经营现金流
     fcf_ttm: float                 # 自由现金流(可选)
+    fcf_per_share: float | None    # 每股自由现金流(可选; 当前 AKShare 缓存口径更稳定)
     total_debt: float              # 有息负债
     cash: float
 
@@ -40,6 +43,8 @@ class StockInput:
     roe_5y_std: float              # ROE 5 年标准差,衡量盈利稳定性
     gross_margin_ttm: float        # %
     debt_to_asset: float           # %
+    accounts_receivable: float | None  # 应收账款(可选; R 使用)
+    inventory: float | None            # 存货(可选; R 使用)
 
     # 分红
     dps_history: list[float]       # 近 5 年每股现金分红,旧→新; 缺失/上市前年份填 0
@@ -105,7 +110,7 @@ def evaluate(stock: StockInput) -> ValuationResult:
     val = value_score(stock, bucket, pe_pct, pb_pct)         # §6.2
     t   = t_score(stock)                                     # §6.3
 
-    fit = 0.45*div + 0.35*val + 0.20*t                       # 策略权重
+    fit = 0.45*div + 0.35*val + 0.20*t                       # 策略权重; Q/R 不进总分
 
     t_low, t_high = t_band(stock, fair_mid)                  # §6.3
 
@@ -347,7 +352,7 @@ pe_high = min(60, 5y PE 75 分位)
 
 ### 6.1 `dividend_score` (0-100)
 
-针对**长线股息+免五**核心要求。
+针对**长线股息+免五**核心要求。D 不只看股息率，还要吸收 Q 中能直接度量的现金流质量与盈利稳定性。
 
 ```
 def dividend_score(s: StockInput) -> float:
@@ -367,17 +372,27 @@ def dividend_score(s: StockInput) -> float:
     elif pr <= 80:
         score += 10
 
-    # (c) 现金流覆盖 F (15 分)
-    # OCF / (净利润 * 3年平均分红率) 越高,分红现金来源越充分。
-    if pr is not None and pr > 0 and s.net_profit_ttm > 0:
-        coverage = s.ocf_ttm / (s.net_profit_ttm * (pr / 100))
-        if coverage >= 1.2:
-            score += 15
-        elif coverage >= 1.0:
-            score += 8
+    # (c) 经营现金流质量 C (10 分)
+    # OCF / 净利润不依赖分红率; 即使公司暂不分红，也能评价利润现金含量。
+    ocf_over_ni = mean(last_3y_ocf / last_3y_net_profit)
+    if ocf_over_ni >= 1.0:
+        score += 10
+    elif ocf_over_ni >= 0.8:
+        score += 6
+    elif ocf_over_ni >= 0.5:
+        score += 3
 
-    # (d) 盈利稳定性 S (15 分)
-    # ROE 标准差小,分红可预测性高
+    # (d) 自由现金流覆盖分红 F (5 分)
+    # 使用每股自由现金流 / 每股现金分红; 缺失不补虚假分。
+    if s.fcf_per_share is not None and latest_dps > 0:
+        fcf_cover = s.fcf_per_share / latest_dps
+        if fcf_cover >= 1.2:
+            score += 5
+        elif fcf_cover >= 1.0:
+            score += 3
+
+    # (e) 盈利稳定性 S (15 分)
+    # ROE 标准差小,分红可预测性高。
     if   s.roe_5y_std < 3: score += 15
     elif s.roe_5y_std < 6: score += 8
 
@@ -411,6 +426,10 @@ def value_score(s, bucket, pe_pct, pb_pct) -> float:
             score *= 0.5      # 价值陷阱惩罚
         elif s.debt_to_asset > 70 and bucket != "BANK":
             score *= 0.7
+
+    # 衰减: 基本面退化不能因为估值便宜而被忽略
+    if revenue_decline_streak(s, n=2):
+        score *= 0.7          # 营收连续下滑，历史估值中枢可能失效
 
     # DIV_INCOME 加成: 当前股息率 > 5y 中位数,加 10 分
     if bucket == "DIV_INCOME":
@@ -479,10 +498,15 @@ def t_band(s: StockInput, fair_mid: float) -> tuple[float, float]:
 |---|---|---|
 | `negative_profit` | `net_profit_ttm < 0` | 高 |
 | `loss_streak` | 近 3 年内有 ≥2 年亏损 | 高 |
+| `revenue_decline_streak` | 营业收入连续若干期下滑 | 高 |
+| `net_profit_decline_streak` | 净利润连续若干期下滑 | 高 |
 | `goodwill_heavy` | 商誉 / 净资产 > 30% | 中 |
 | `over_leverage` | 非金融股 `debt_to_asset > 70` | 中 |
 | `dividend_unstable` | 5 年内有断档/暴跌 | 高(对本策略) |
 | `ocf_disparity` | OCF / 净利润 < 0.5,持续 2 年 | 中 |
+| `ar_anomaly` | 应收账款年度增幅 > 40% | 中 |
+| `inventory_anomaly` | 存货年度增幅 > 40% | 中 |
+| `pledge_heavy` | 大股东高比例质押 | 高(当前缓存不可得，需新增数据源后启用) |
 | `cycle_top_risk` | `PB_CYCLICAL` 中 `pe<5 & pb>70 分位` | 高 |
 | `value_trap` | 估值分位 < 5% 且 ROE 趋势下行 | 高 |
 | `low_liquidity` | 20 日均成交 < 3000 万元 | 中(影响做 T) |
@@ -538,6 +562,10 @@ ak.stock_financial_em(stock="600519", symbol="利润表")
 ak.stock_financial_em(stock="600519", symbol="现金流量表")
 ak.stock_financial_analysis_indicator(symbol="600519")
 
+# 当前实现优先使用的缓存口径
+ak.stock_financial_abstract(symbol="600519")                 # OCF、ROE、利润率、每股自由现金流等
+ak.stock_balance_sheet_by_yearly_em(symbol="SH600519")       # 应收、存货、商誉、现金、短债等
+
 # 分红
 ak.stock_dividend_cninfo(symbol="600519")
 
@@ -563,10 +591,11 @@ ak.stock_board_industry_name_em()       # 东财行业(备用)
 4. **冷启动**: 上市 < 1 年的股票直接 `flags=["data_insufficient"]` 并跳过分位计算。
 5. **bucket 兜底**: 若行业名称不在 §4 表中(罕见,如新增三级),默认归 `PE_STABLE` 并加 flag `bucket_fallback`。
 6. **免五策略下的 dividend_score 校准**: 因免税带来 ~20% 真实收益增益,本评分体系的 X 子项**已默认按税前 DPS/股息率算**,无需额外加权。但如果调用方做策略对比时纳入了短线持有(<1年)的 case,需对短线情形将各年 DPS 或 5 年加权股息率乘 0.8 后再评分。
-7. **做 T 区间的实操**: `t_band` 输出仅是参考价位,实际下单需结合调用方的仓位管理与单笔交易额限制(避免冲击成本吃掉 T 收益)。
+7. **缓存可得性边界**: 当前缓存已覆盖 OCF、每股自由现金流、ROE、毛利率、净利率、资产负债率、应收、存货、商誉、现金和短债；未覆盖大股东质押比例，`pledge_heavy` 不能仅凭现有缓存可靠触发。
+8. **做 T 区间的实操**: `t_band` 输出仅是参考价位,实际下单需结合调用方的仓位管理与单笔交易额限制(避免冲击成本吃掉 T 收益)。
 
 ---
 
-**版本**: v1.0
+**版本**: v1.1
 **适用市场**: A 股(沪/深/北),不含港美股
 **复审建议**: 季度更新各 bucket 的中枢参数(§5 表格);年度复盘 strategy_fit 权重与历史持仓表现的相关性。

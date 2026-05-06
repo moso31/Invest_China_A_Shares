@@ -361,6 +361,25 @@ def _quick_period_values(metrics: dict | None, key: str, limit: int | None = Non
     return out[:limit] if limit else out
 
 
+def _same_period_yoy_streak(periods: list[tuple[str, float]], n: int) -> tuple[bool, list[tuple[str, float]]]:
+    if len(periods) < 2 or n <= 0:
+        return False, []
+    by_period = {re.sub(r"\D", "", str(period)): value for period, value in periods}
+    yoy_values: list[tuple[str, float]] = []
+    for period, value in sorted(by_period.items(), reverse=True):
+        if len(period) != 8:
+            continue
+        prev_period = f"{int(period[:4]) - 1}{period[4:]}"
+        prev_value = by_period.get(prev_period)
+        if prev_value is None or prev_value == 0:
+            continue
+        yoy = (value - prev_value) / abs(prev_value) * 100
+        yoy_values.append((period, yoy))
+        if len(yoy_values) >= n:
+            break
+    return len(yoy_values) >= n and all(yoy < 0 for _, yoy in yoy_values), yoy_values
+
+
 def _dividend_by_year_from_bulk_fhps(df: pd.DataFrame | None) -> dict[int, float]:
     if df is None or df.empty or "REPORT_DATE" not in df.columns or "PRETAX_BONUS_RMB" not in df.columns:
         return {}
@@ -653,6 +672,7 @@ def evaluate(symbol: str, name: str | None = None) -> ValuationEstimate:
 
     quick = _quick_metrics(symbol)
     fin = source.financial_abstract(symbol)
+    rev_row = _find_indicator_row(fin, "营业总收入", "营业收入")
     roe_vals = [v for _, v in _quick_year_values(quick, "roe_by_year", limit=5)]
     if not roe_vals:
         roe_vals = [v for _, v in _annual_values(fin, "净资产收益率", "ROE", limit=5)]
@@ -665,12 +685,18 @@ def evaluate(symbol: str, name: str | None = None) -> ValuationEstimate:
     net_profit_latest = _latest_from_quick(quick, "ni_by_period")
     if net_profit_latest is None:
         net_profit_latest = _latest_value(fin, "归母净利润", "归属于母公司", "净利润")
+    revenue_decline_streak, revenue_yoys = _same_period_yoy_streak(
+        _quick_period_values(quick, "revenue_by_period") or _row_period_values(rev_row),
+        config.REVENUE_DECLINE_QUARTERS,
+    )
     components.update(
         {
             "roe_3y_avg": round(roe_3y_avg, 2) if roe_3y_avg is not None else None,
             "roe_5y_std": round(roe_5y_std, 2) if roe_5y_std is not None else None,
             "debt_to_asset": round(debt_ratio, 2) if debt_ratio is not None else None,
             "net_profit_latest": round(net_profit_latest, 2) if net_profit_latest is not None else None,
+            "revenue_decline_streak": revenue_decline_streak,
+            "revenue_yoy_streak": [(period, round(yoy, 2)) for period, yoy in revenue_yoys],
         }
     )
     if net_profit_latest is not None and net_profit_latest < 0:
@@ -865,6 +891,11 @@ def evaluate(symbol: str, name: str | None = None) -> ValuationEstimate:
         elif debt_ratio is not None and debt_ratio > 70 and effective_bucket != "BANK":
             score *= 0.7
             flags.append("value_trap：估值极低但杠杆偏高")
+    if revenue_decline_streak:
+        score *= config.VALUE_REVENUE_DECLINE_DISCOUNT
+        flags.append(
+            f"fundamental_deterioration：营业收入连续 {config.REVENUE_DECLINE_QUARTERS} 个可比报告期同比下滑，估值分衰减"
+        )
 
     if effective_bucket == "DIV_INCOME":
         div_ctx = extra_components or _dividend_context(symbol, price)

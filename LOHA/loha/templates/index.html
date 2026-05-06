@@ -42,7 +42,7 @@
     <h3>权重</h3>
     <table class="kv">
       <tr><td><span class="factor-help" data-tooltip="Q = 企业质量复核项。用于人工复核和价值陷阱识别，不直接进入策略适配分。">企业质量 Q</span></td><td>{{ config.weights.Q }}</td></tr>
-      <tr><td><span class="factor-help" data-tooltip="D = dividend_score。按5年加权股息率、分红率风险过滤、现金流覆盖、ROE 稳定性合成。">分红质量 D</span></td><td>{{ config.weights.D }}</td></tr>
+      <tr><td><span class="factor-help" data-tooltip="D = dividend_score。按5年加权股息率、分红率风险过滤、OCF/净利润、自由现金流/分红覆盖、ROE 稳定性合成。">分红质量 D</span></td><td>{{ config.weights.D }}</td></tr>
       <tr><td><span class="factor-help" data-tooltip="V = value_score。按 estimate.md 行业 bucket 选择 PE/PB/DDM/NAV 等主估值方法，输出估值带和安全边际。">估值安全 V</span></td><td>{{ config.weights.V }}</td></tr>
       <tr><td><span class="factor-help" data-tooltip="T = t_score。按 60 日年化波动、20 日成交额、Beta 和 60 日趋势判断小幅做T适配度。">交易可操作 T</span></td><td>{{ config.weights.T }}</td></tr>
       <tr><td><span class="factor-help" data-tooltip="R = 风险复核项。高风险会触发加仓确认，不直接扣策略适配分。">风险复核 R</span></td><td>{{ config.weights.R }}</td></tr>

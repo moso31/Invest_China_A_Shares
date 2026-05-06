@@ -86,7 +86,7 @@ SCREENER_MAX_WORKERS = 4
 # estimate.md strategy_fit = 0.45D + 0.35V + 0.20T.
 # Q and R remain visible review factors; red flags are handled separately.
 
-SCORING_RULE_VERSION = 5
+SCORING_RULE_VERSION = 6
 W_QUALITY = 0.00
 W_DIVIDEND = 0.45
 W_VALUATION = 0.35
@@ -122,6 +122,8 @@ TURNOVER_WINDOW = 60
 REVENUE_DECLINE_QUARTERS = 2  # consecutive quarters
 NI_DECLINE_QUARTERS = 2
 OCF_OVER_NI_HARD_FLOOR = 0.5
+AR_INVENTORY_YOY_WARNING = 40.0  # %, balance-sheet item YoY jump
+VALUE_REVENUE_DECLINE_DISCOUNT = 0.70
 
 # ---- Trading plan ---------------------------------------------------------
 
