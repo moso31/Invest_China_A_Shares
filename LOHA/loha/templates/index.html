@@ -16,17 +16,6 @@
 
 <section class="grid">
   <div class="card">
-    <h3>行业过滤</h3>
-    <p class="muted">勾选不想纳入机器选股结果的行业。保存后，机器选股列表会自动排除这些行业。</p>
-    <div id="industryFilter" class="filter-list">
-      <span class="muted">读取行业列表...</span>
-    </div>
-    <div class="row" style="margin-top:1em">
-      <button id="saveIndustryFilter" class="button primary">保存过滤器</button>
-      <span id="industryFilterStatus" class="muted"></span>
-    </div>
-  </div>
-  <div class="card">
     <h3>1️⃣ 机器选股</h3>
     <p>对 {{ config.universe_size }} 个标的，应用硬门槛（剔除 ST / 低流动性），按 estimate.md 的策略适配分排序。</p>
   </div>
@@ -54,43 +43,4 @@
     <p>底仓 {{ (config.core_ratio * 100)|round|int }}%，网格仓 {{ (config.grid_ratio * 100)|round|int }}%。低于 ¥5：每档 200 股；不低于 ¥5：每档 100 股。</p>
   </div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-const industryBox = document.getElementById("industryFilter");
-const saveBtn = document.getElementById("saveIndustryFilter");
-const statusEl = document.getElementById("industryFilterStatus");
-
-function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-
-async function loadIndustryFilter() {
-  const r = await (await fetch("/api/settings/industry-filter")).json();
-  const excluded = new Set(r.excluded_industries || []);
-  const industries = r.industries || [];
-  if (!industries.length) {
-    industryBox.innerHTML = `<span class="muted">暂无行业列表。先执行一次机器选股或全 A 股扫描后会自动生成。</span>`;
-    return;
-  }
-  industryBox.innerHTML = industries.map(ind => `
-    <label class="check-item">
-      <input type="checkbox" value="${escapeHtml(ind)}" ${excluded.has(ind) ? "checked" : ""} />
-      <span>${escapeHtml(ind)}</span>
-    </label>
-  `).join("");
-}
-
-async function saveIndustryFilter() {
-  const excluded = Array.from(industryBox.querySelectorAll("input:checked")).map(x => x.value);
-  await fetch("/api/settings/industry-filter", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({excluded_industries: excluded}),
-  });
-  statusEl.textContent = `已保存，当前排除 ${excluded.length} 个行业`;
-}
-
-saveBtn.addEventListener("click", saveIndustryFilter);
-loadIndustryFilter();
-</script>
 {% endblock %}

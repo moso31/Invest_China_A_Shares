@@ -184,9 +184,6 @@ def clear_kind(kind: str) -> None:
 
 def clear_data_sources() -> None:
     """Clear raw AKShare caches for the complete full-market refresh.
-
-    Fast full-market refresh intentionally does not call this; it preserves
-    per-symbol raw data so the full Q/D/V/T/R scoring chain can reuse it.
     """
     for kind in ("universe", "price_hist", "indicator", "financial", "dividend", "info", "bulk"):
         clear_kind(kind)

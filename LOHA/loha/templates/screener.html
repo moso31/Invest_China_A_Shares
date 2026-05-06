@@ -8,7 +8,6 @@
       <input id="topN" type="number" value="20" min="1" max="500" />
     </label>
     <button id="runBtn" class="button primary">开始扫描</button>
-    <button id="fullScanFastBtn" class="button">强制更新全 A 股数据：快速</button>
     <button id="fullScanFullBtn" class="button">强制更新全 A 股数据：完全</button>
     <div class="progress-box scan-progress">
       <div class="progress-head">
@@ -140,7 +139,6 @@
 {% block scripts %}
 <script>
 const runBtn = document.getElementById("runBtn");
-const fullScanFastBtn = document.getElementById("fullScanFastBtn");
 const fullScanFullBtn = document.getElementById("fullScanFullBtn");
 const topNEl = document.getElementById("topN");
 const progEl = document.getElementById("progress");
@@ -168,22 +166,19 @@ const FULL_RESULT_LIMIT = 10000;
 
 async function runScreen() {
   runBtn.disabled = true;
-  fullScanFastBtn.disabled = true;
   fullScanFullBtn.disabled = true;
   const params = new URLSearchParams({mode: "all"});
   await fetch(`/api/screener/run?${params.toString()}`, {method: "POST"});
   poll();
 }
 
-async function runFullScan(refreshMode) {
-  const fastMsg = "全 A 股快速强制更新会保留单股原始缓存，只刷新候选池快照并确保批量宽表可用；评分逻辑仍然是完整 Q/D/V/T/R。确认开始？";
+async function runFullScan() {
   const completeMsg = "全 A 股完全强制更新会清理本地行情/财务/估值/分红缓存，并重新抓取所有通过预筛股票的数据，可能耗时数十分钟甚至更久。确认开始？";
-  const ok = confirm(refreshMode === "complete" ? completeMsg : fastMsg);
+  const ok = confirm(completeMsg);
   if (!ok) return;
   runBtn.disabled = true;
-  fullScanFastBtn.disabled = true;
   fullScanFullBtn.disabled = true;
-  await fetch(`/api/screener/full-scan/run?refresh_mode=${refreshMode}`, {method: "POST"});
+  await fetch("/api/screener/full-scan/run", {method: "POST"});
   poll();
 }
 
@@ -205,18 +200,15 @@ async function poll() {
       : "全A股";
     setScanProgress(r, `${scope} · 深度评分 ${r.done}/${r.total} · 入选 ${r.accepted} · 剔除 ${r.rejected} · 失败 ${r.failed} · 完成 · 用时 ${r.elapsed_s}s`, 100);
     runBtn.disabled = false;
-    fullScanFastBtn.disabled = false;
     fullScanFullBtn.disabled = false;
     await loadResults();
     await loadFullScanMeta();
   } else if (r.state === "error") {
     setScanProgress(r, `错误：${r.error}`);
     runBtn.disabled = false;
-    fullScanFastBtn.disabled = false;
     fullScanFullBtn.disabled = false;
   } else {
     runBtn.disabled = false;
-    fullScanFastBtn.disabled = false;
     fullScanFullBtn.disabled = false;
   }
 }
@@ -254,7 +246,7 @@ function scanDuration(m) {
 
 function updateFullScanMetaText(m) {
   const recompute = m.last_recompute_at ? ` · 最后调试重算 ${m.last_recompute_at}` : "";
-  const mode = m.refresh_mode_label || (m.refresh_mode === "complete" ? "完全更新" : "快速更新");
+  const mode = fullScanModeText(m);
   const duration = n(scanDuration(m), 1);
   const sourceTotal = m.source_total || 0;
   const prefilteredTotal = m.prefiltered_total || 0;
@@ -270,6 +262,12 @@ function updateFullScanMetaText(m) {
   } else {
     fullScanMetaEl.textContent = `扫描完毕：${m.success_at || m.updated_at || "—"} · ${mode} · 用时 ${duration}s · 全市场 ${sourceTotal} · 预筛通过 ${prefilteredTotal} · 入选 ${accepted} · 剔除 ${rejected} · 失败 ${failed}${recompute}`;
   }
+}
+
+function fullScanModeText(m) {
+  if (!m) return "完全更新";
+  if (m.refresh_mode === "cached_or_normal") return m.refresh_mode_label || "复用本地结果";
+  return "完全更新";
 }
 
 async function loadFullScanMeta() {
@@ -346,7 +344,7 @@ function renderFullScanDetails() {
     <table class="kv detail-kv">
       <tr><td>状态</td><td>${escapeHtml(m.status || "扫描完毕")}</td></tr>
       <tr><td>更新时间</td><td>${escapeHtml(m.success_at || m.updated_at || "进行中")}</td></tr>
-      <tr><td>更新模式</td><td>${escapeHtml(m.refresh_mode_label || m.refresh_mode || "—")}</td></tr>
+      <tr><td>更新模式</td><td>${escapeHtml(fullScanModeText(m))}</td></tr>
       <tr><td>总耗时</td><td>${n(scanDuration(m), 1)}s</td></tr>
       <tr><td>候选池</td><td>全市场 ${m.source_total || 0} · 预筛通过 ${m.prefiltered_total || 0} · 深度评分 ${m.done || 0}/${m.total || 0}</td></tr>
       <tr><td>结果</td><td>入选 ${m.accepted || 0} · 剔除 ${m.rejected || 0} · 失败 ${m.failed || 0}</td></tr>
@@ -667,8 +665,7 @@ function escapeAttr(s) { return escapeHtml(s).replace(/'/g, "&#39;"); }
 function escapeTooltipAttr(s) { return escapeAttr(s).replace(/\n/g, "&#10;"); }
 
 runBtn.addEventListener("click", runScreen);
-fullScanFastBtn.addEventListener("click", () => runFullScan("fast"));
-fullScanFullBtn.addEventListener("click", () => runFullScan("complete"));
+fullScanFullBtn.addEventListener("click", runFullScan);
 topNEl.addEventListener("change", applyFilters);
 stockSearchEl.addEventListener("input", applyFilters);
 resetFiltersBtn.addEventListener("click", resetFilters);

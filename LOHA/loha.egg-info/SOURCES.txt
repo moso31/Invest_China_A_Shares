@@ -13,7 +13,6 @@ loha/request_stats.py
 loha/scoring.py
 loha/screener.py
 loha/server.py
-loha/settings.py
 loha/source.py
 loha/valuation.py
 loha.egg-info/PKG-INFO
@@ -30,4 +29,4 @@ loha/templates/pool.html
 loha/templates/screener.html
 tests/test_bulk_dividend.py
 tests/test_factor_refinements.py
-tests/test_screener_fast_refresh.py
+tests/test_screener_full_refresh.py

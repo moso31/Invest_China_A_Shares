@@ -51,10 +51,6 @@ FULL_SCAN_RESULTS_KEY = "full_scan_results"
 FULL_SCAN_META_KEY = "full_scan_meta"
 LAST_RUN_KEY = "last_run"
 
-# Refresh modes only control raw-cache invalidation. They must not change
-# _score_one(), factors.all_factors(), or scoring.composite(), because ranking
-# depends on the complete Q/D/V/T/R factor chain and all of its sub-metrics.
-FULL_REFRESH_FAST = "fast"
 FULL_REFRESH_COMPLETE = "complete"
 
 
@@ -217,7 +213,12 @@ def _score_from_dict(row: dict) -> StockScore:
 
 
 def full_scan_meta() -> dict | None:
-    return cache.get_json("screener", FULL_SCAN_META_KEY)
+    meta = cache.get_json("screener", FULL_SCAN_META_KEY)
+    if not isinstance(meta, dict):
+        return None
+    if meta.get("refresh_mode") == "fast" or meta.get("refresh_mode_label") == "快速更新":
+        meta = {**meta, "refresh_mode": FULL_REFRESH_COMPLETE, "refresh_mode_label": "完全更新"}
+    return meta
 
 
 def _load_cached_full_scan() -> tuple[list[StockScore], dict] | None:
@@ -333,42 +334,14 @@ def _passes_hard_gates(symbol: str, name: str) -> tuple[bool, list[str]]:
 def _preheat_bulk_caches(force: bool = False) -> None:
     """Prepare market-wide bulk tables used by the normal Q/D/V/T/R factor chain.
 
-    Fast full-market refresh calls this without clearing per-symbol caches, so
-    existing single-stock raw data can be reused. Complete full-market refresh
-    clears all raw data first, including these bulk caches, and then rebuilds
-    them from AKShare.
+    Full-market refresh clears raw data first, including these bulk caches, and
+    then rebuilds them from AKShare.
     """
     periods = bulk._recent_periods(n_years=5)
     if force:
         cache.clear_kind("bulk")
     bulk.bulk_yjbb(periods)
     bulk.bulk_fhps(periods)
-
-
-def _refresh_spot_snapshot_preserving_stale() -> None:
-    """Refresh the candidate-pool snapshot without discarding the stale fallback.
-
-    The fast full-market refresh must still use the same scoring logic as a
-    complete refresh. Its speed comes from not purging per-symbol caches; this
-    snapshot refresh is only for the cheap prefilter and spot liquidity gates.
-    """
-    stale = cache.get_stale("price_hist", "realtime_snapshot")
-    cache.delete("price_hist", "realtime_snapshot")
-    fresh = source.realtime_snapshot()
-    if fresh is None or fresh.empty:
-        if source.is_complete_realtime_snapshot(stale):
-            log.warning("fast full-market refresh: realtime snapshot fetch failed; restored stale snapshot cache")
-            cache.put("price_hist", stale, "realtime_snapshot")
-        else:
-            log.warning(
-                "fast refresh: realtime snapshot fetch failed and no stale cache available; downstream will degrade to code-name universe"
-            )
-
-
-def _normalise_refresh_mode(refresh_mode: str | None) -> str:
-    if refresh_mode in {FULL_REFRESH_FAST, FULL_REFRESH_COMPLETE}:
-        return refresh_mode
-    return FULL_REFRESH_FAST
 
 
 def _spot_amount_too_low(spot: dict) -> bool:
@@ -403,10 +376,11 @@ def run(
     on_progress: Callable[[ScreenProgress], None] | None = None,
     mode: str | None = None,
     force_refresh: bool = False,
-    refresh_mode: str = FULL_REFRESH_FAST,
+    refresh_mode: str = FULL_REFRESH_COMPLETE,
 ) -> list[StockScore]:
     scan_mode = _normalise_mode(mode)
-    refresh_mode = _normalise_refresh_mode(refresh_mode)
+    if scan_mode == "all" and force_refresh:
+        refresh_mode = FULL_REFRESH_COMPLETE
     request_stats_active = scan_mode == "all" and force_refresh
     if request_stats_active:
         request_stats.reset(active=True)
@@ -415,7 +389,7 @@ def run(
     _progress.mode = scan_mode
     if scan_mode == "all" and force_refresh:
         _progress.refresh_mode = refresh_mode
-        _progress.refresh_mode_label = "完全更新" if refresh_mode == FULL_REFRESH_COMPLETE else "快速更新"
+        _progress.refresh_mode_label = "完全更新"
     elif scan_mode == "all":
         _progress.refresh_mode = "cached_or_normal"
         _progress.refresh_mode_label = "复用本地结果"
@@ -461,18 +435,10 @@ def run(
             _progress.results = []
             return []
 
-        # Fast and complete full-market refreshes share the exact same scoring
-        # path below. Fast keeps per-symbol raw caches and refreshes only the
-        # candidate/bulk inputs; complete deletes raw caches and rebuilds them.
-        if scan_mode == "all" and force_refresh and refresh_mode == FULL_REFRESH_COMPLETE:
+        if scan_mode == "all" and force_refresh:
             _progress.current_symbol = "完整强刷：清理所有原始数据缓存"
             cache.clear_data_sources()
             _progress.current_symbol = "完整强刷：预热全市场批量宽表"
-            _preheat_bulk_caches(force=False)
-        elif scan_mode == "all" and force_refresh:
-            _progress.current_symbol = "快速强刷：保留单股缓存，刷新候选池快照"
-            _refresh_spot_snapshot_preserving_stale()
-            _progress.current_symbol = "快速强刷：确认全市场批量宽表缓存"
             _preheat_bulk_caches(force=False)
 
         universe, source_total, prefiltered_total = _build_universe(scan_mode)
@@ -599,7 +565,7 @@ def recompute_cached_full_scan(
             if not universe:
                 _progress.state = "error"
                 _progress.error = (
-                    "暂无可重算的本地股票范围缓存。请先完成一次全 A 股快速或完全扫描，"
+                    "暂无可重算的本地股票范围缓存。请先完成一次全 A 股完全扫描，"
                     "或确认 universe/realtime_snapshot 缓存仍存在。"
                 )
                 _progress.results = []

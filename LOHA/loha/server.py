@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from loha import config, factors, interval, pool, request_stats, scoring, screener, settings, source
+from loha import config, factors, interval, pool, request_stats, scoring, screener, source
 from loha.eastmoney import EASTMONEY_NID18_ENV_VAR, load_persisted_nid18, nid18_configured, set_nid18_for_process
 
 PKG_DIR = Path(__file__).resolve().parent
@@ -211,28 +211,6 @@ def _stock_payload(symbol: str) -> dict:
     }
 
 
-def _industry_of(row: dict) -> str:
-    return str((((row.get("components") or {}).get("Q") or {}).get("industry") or "")).strip()
-
-
-def _apply_industry_filter(rows: list[dict]) -> list[dict]:
-    excluded = set(settings.excluded_industries())
-    if not excluded:
-        return rows
-    return [r for r in rows if _industry_of(r) not in excluded]
-
-
-def _available_industries() -> list[str]:
-    rows = []
-    full = screener.cache.get_json("screener", screener.FULL_SCAN_RESULTS_KEY)
-    if isinstance(full, list):
-        rows.extend(full)
-    last = screener.last_results()
-    if isinstance(last, list):
-        rows.extend(last)
-    return sorted({industry for industry in (_industry_of(r) for r in rows) if industry})
-
-
 def _pool_plan(entry: pool.PoolEntry, interval_row: dict | None) -> dict:
     interval_row = interval_row or {}
     current_price = interval_row.get("last_price")
@@ -364,20 +342,19 @@ def api_screener_run(top_n: int | None = None, mode: str | None = None):
 
 
 @app.post("/api/screener/full-scan/run")
-def api_full_scan_run(refresh_mode: str = "fast"):
+def api_full_scan_run():
     global _screen_thread
-    refresh_mode = "complete" if refresh_mode in {"complete", "full"} else "fast"
     with _screen_lock:
         prog = screener.progress()
         if prog.state == "running":
             return {"ok": False, "msg": "screening already in progress", "progress": prog.__dict__}
         _screen_thread = threading.Thread(
             target=screener.run,
-            kwargs={"mode": "all", "force_refresh": True, "refresh_mode": refresh_mode},
+            kwargs={"mode": "all", "force_refresh": True, "refresh_mode": screener.FULL_REFRESH_COMPLETE},
             daemon=True,
         )
         _screen_thread.start()
-    return {"ok": True, "refresh_mode": refresh_mode}
+    return {"ok": True, "refresh_mode": screener.FULL_REFRESH_COMPLETE}
 
 
 @app.post("/api/debug/recompute-scores/run")
@@ -453,13 +430,8 @@ def api_full_scan_meta():
 @app.get("/api/screener/results")
 def api_screener_results(limit: int = 50):
     rows = screener.last_results() or []
-    rows = _apply_industry_filter(rows)
     rows = [_json_safe(_normalise_score_row(r)) for r in rows]
     return {"results": rows[:limit], "total": len(rows)}
-
-
-class IndustryFilterRequest(BaseModel):
-    excluded_industries: list[str] = []
 
 
 class EastmoneyNid18Request(BaseModel):
@@ -484,23 +456,6 @@ def api_get_eastmoney_nid18():
 def api_set_eastmoney_nid18(req: EastmoneyNid18Request):
     set_nid18_for_process(_validate_nid18(req.nid18))
     return {"ok": True, **_eastmoney_settings_context()}
-
-
-@app.get("/api/settings/industry-filter")
-def api_get_industry_filter():
-    return {
-        "industries": _available_industries(),
-        "excluded_industries": settings.excluded_industries(),
-    }
-
-
-@app.post("/api/settings/industry-filter")
-def api_set_industry_filter(req: IndustryFilterRequest):
-    return {
-        "ok": True,
-        "excluded_industries": settings.set_excluded_industries(req.excluded_industries),
-        "industries": _available_industries(),
-    }
 
 
 @app.get("/api/pool")
